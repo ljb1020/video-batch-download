@@ -1,0 +1,73 @@
+{
+  "status": "success",
+  "source_url": "https://v.douyin.com/iRNBho5/",
+  "canonical_url": "https://www.douyin.com/video/7401234567890123456",
+  "video_id": "7401234567890123456",
+  "platform": "抖音",
+  "content_type": "video",
+  "title": "今天给大家分享一个好用的AI工具",
+  "description": "这个视频教大家怎么用 AI 提高效率 #AI #效率 #工具分享",
+  "author": {
+    "nickname": "张三",
+    "uid": "MS4wLjABAAAA...",
+    "url": "https://www.douyin.com/user/MS4wLjABAAAA..."
+  },
+  "post_time": "2026-06-20 14:30:00",
+  "duration": 125,
+  "stats": {
+    "play_count": 15234,
+    "digg_count": 1234,
+    "comment_count": 56,
+    "share_count": 78,
+    "collect_count": 90
+  },
+  "transcript": "大家好，今天给大家分享一个非常好用的AI工具。这个工具叫做Claude Code，它是Anthropic公司开发的一个命令行助手。首先我们来看一下它的安装方法，非常简单，只需要一行命令就可以了。然后我们看看它的主要功能，第一个是代码编写，第二个是代码审查，第三个是自动化测试。这些功能在日常开发中都非常实用。特别是代码审查功能，它可以帮助你发现很多潜在的问题。好，今天的分享就到这里，如果觉得有用的话记得点赞收藏。",
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 2.5,
+      "text": "大家好，今天给大家分享一个非常好用的AI工具。",
+      "simplified": true
+    },
+    {
+      "start": 2.5,
+      "end": 8.3,
+      "text": "这个工具叫做Claude Code，它是Anthropic公司开发的一个命令行助手。",
+      "simplified": true
+    },
+    {
+      "start": 8.3,
+      "end": 15.1,
+      "text": "首先我们来看一下它的安装方法，非常简单，只需要一行命令就可以了。",
+      "simplified": true
+    },
+    {
+      "start": 15.1,
+      "end": 25.6,
+      "text": "然后我们看看它的主要功能，第一个是代码编写，第二个是代码审查，第三个是自动化测试。",
+      "simplified": true
+    },
+    {
+      "start": 25.6,
+      "end": 32.0,
+      "text": "这些功能在日常开发中都非常实用。特别是代码审查功能，它可以帮助你发现很多潜在的问题。",
+      "simplified": true
+    },
+    {
+      "start": 32.0,
+      "end": 38.5,
+      "text": "好，今天的分享就到这里，如果觉得有用的话记得点赞收藏。",
+      "simplified": true
+    }
+  ],
+  "transcript_source": "faster-whisper",
+  "transcription": {
+    "model": "small",
+    "language": "zh",
+    "language_probability": 0.98,
+    "device": "cpu",
+    "compute_type": "int8"
+  },
+  "output_file": "douyin_results/2026_06_24_21-30-00_抖音_张三_7401234567890123456/2026_06_24_21-30-00_抖音_张三_7401234567890123456.json",
+  "transcript_file": "douyin_results/2026_06_24_21-30-00_抖音_张三_7401234567890123456/2026_06_24_21-30-00_抖音_张三_7401234567890123456_transcript.txt"
+}

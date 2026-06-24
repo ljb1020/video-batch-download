@@ -1,6 +1,8 @@
 node_modules/
 downloads/
+douyin_results/
 download-state.json
 *.part
+*.wav
 playwright-report/
 test-results/

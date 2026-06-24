@@ -1,55 +1,211 @@
 ---
 name: douyin-batch-download
-description: Reliably download public Douyin videos from copied share text or URLs in batches, using a real Chromium session to obtain fresh signed media URLs, concurrent downloads, retries, and resumable state. Use when Codex or Claude Code is asked to 下载抖音视频、批量解析抖音分享链接、保存公开视频、重试失败下载，especially for 10–30 or more links.
+description: "Use this skill when the user provides 抖音 分享链接 or URLs and wants to download videos, extract metadata, transcribe audio with local Whisper, convert Traditional→Simplified Chinese, or get structured transcripts as JSON/TXT."
+license: MIT
+metadata:
+    version: "2.0.0"
 ---
 
-# Douyin batch download
+# Douyin Batch Download & Transcribe
 
-Use the bundled Node.js script. Do not substitute `yt-dlp`, F2, or an unauthenticated third-party parsing API; those paths are currently less reliable than browser interception.
+Download public Douyin videos and extract transcripts — fully locally, no cloud APIs.
+
+## When to use
+
+- User pastes one or more 抖音 links and wants the spoken content as text
+- User says "提取文案", "语音转文字", "下载抖音视频", or gives a Douyin URL
+- User wants structured metadata (title, author, stats, post time) from Douyin posts
+- User wants batch download and/or transcription of Douyin videos
 
 ## First run
 
 Run from this skill directory:
 
-```powershell
+```bash
 npm install
 node scripts/setup.mjs
 ```
 
 `setup.mjs` verifies Playwright and installs Chromium only when needed.
 
-## Download
+### Python dependencies (for transcription)
 
-Ask where to save files if the user did not specify a directory. For pasted share text or a few URLs:
-
-```powershell
-node scripts/download.mjs --output "D:\Videos\douyin" "paste share text 1" "paste share text 2"
+```bash
+pip install -U faster-whisper opencc
 ```
 
-For a text file containing any mixture of share text and URLs:
+Also requires `ffmpeg` on PATH.
 
-```powershell
-node scripts/download.mjs --input links.txt --output "D:\Videos\douyin"
+## Workflow
+
+1. **Receive URLs** — User provides one or more Douyin links (or share text containing links). The script auto-extracts valid URLs from any text.
+2. **Ask for output directory** — If user doesn't specify, default to `./douyin_results/`.
+3. **Run the script** — Parallel pipeline:
+    - Parse video metadata via Playwright browser interception (parallel, concurrency 3)
+    - Download MP4 via CDN URL (parallel, concurrency 6)
+    - Extract audio with ffmpeg → transcribe with local faster-whisper (serial, GPU-safe)
+    - Convert Traditional Chinese to Simplified via OpenCC
+    - Write structured JSON + plain text transcript
+4. **Report results** — Real-time progress on stderr + final JSON summary on stdout.
+
+## Usage
+
+### Single URL (or share text with embedded URL)
+
+```bash
+node scripts/download.mjs "https://v.douyin.com/xxxxx"
 ```
 
-Defaults are tuned for ordinary batches: 3 concurrent browser parsers, 6 concurrent downloads, and 10 attempts per item. Keep browser concurrency low even when the batch is large. To wait indefinitely for retryable failures, use `--max-attempts 0`; stop it manually if a link is permanently unavailable.
+### Multiple URLs
 
-```powershell
+```bash
+node scripts/download.mjs "url1" "url2" "url3"
+```
+
+### Custom output directory
+
+```bash
+node scripts/download.mjs "url" --output ./my_output
+```
+
+### From a text file
+
+```bash
+node scripts/download.mjs --input links.txt --output ./douyin_results
+```
+
+### Skip transcription (download metadata only)
+
+```bash
+node scripts/download.mjs "url" --no-transcribe
+```
+
+### GPU acceleration with high accuracy
+
+```bash
+node scripts/download.mjs "url" --device cuda --compute-type float16 --model large-v3
+```
+
+### Indefinite retry for flaky links
+
+```bash
 node scripts/download.mjs --input links.txt --output ./downloads --max-attempts 0
 ```
 
-If repeated verification challenges prevent headless parsing, rerun failed items with a visible browser:
+### Visible browser for verification challenges
 
-```powershell
+```bash
 node scripts/download.mjs --input links.txt --output ./downloads --headed
 ```
 
-## Completion contract
+## CLI Options
 
-- Treat an item as complete only after the MP4 is fully streamed, its byte count is consistent, and an MP4 `ftyp` marker is present.
-- Preserve `download-state.json` in the output directory. Rerunning the same command skips verified files and retries unfinished items.
-- Do not expose transient CDN URLs as the final result; return saved file paths.
-- Report every item as `completed`, `failed`, or `permanent_failure`. Private, deleted, region-restricted, or permission-gated works cannot be guaranteed.
-- For more than 30 links, keep `--parse-concurrency` at 2–3. Raise only `--download-concurrency` when bandwidth permits.
+### Download options
+
+| Parameter | Default | Description |
+|---|---|---|
+| `--input <file>` | — | Read URLs from a UTF-8 text file |
+| `--output <dir>` | `./douyin_results` | Output directory |
+| `--parse-concurrency <n>` | `3` | Concurrent browser parsers |
+| `--download-concurrency <n>` | `6` | Concurrent media downloads |
+| `--max-attempts <n>` | `10` | Retry attempts per item (0 = infinite) |
+| `--page-timeout <secs>` | `45` | Page navigation timeout |
+| `--media-wait <secs>` | `25` | Wait for media response after navigation |
+| `--download-timeout <secs>` | `900` | Total download timeout per file |
+| `--headed` | off | Show browser window |
+| `--storage-state <file>` | — | Playwright storage-state JSON |
+
+### Transcription options
+
+| Parameter | Default | Description |
+|---|---|---|
+| `--no-transcribe` | off | Skip Whisper transcription |
+| `--model <name>` | `small` | Whisper model (`small`, `medium`, `large-v3`) |
+| `--language <code>` | `auto` | Language code, `auto` = auto-detect |
+| `--device <cpu\|cuda>` | `cpu` | Transcription device |
+| `--compute-type <type>` | `int8` | Precision (`int8`, `float16`, `float32`) |
+| `--no-simplify` | off | Skip Traditional→Simplified conversion |
+| `--ffmpeg-path <path>` | auto | Path to ffmpeg executable |
+| `--transcribe-timeout <secs>` | `600` | Timeout per transcription |
+| `--transcribe-concurrency <n>` | `3` (cpu) / `1` (cuda) | Parallel transcriptions |
+
+## Output format
+
+Each video gets its own subdirectory:
+
+```
+douyin_results/
+  ├── 2026_06_24_21-30-00_抖音_张三_740123456789/
+  │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.json
+  │   └── 2026_06_24_21-30-00_抖音_张三_740123456789_transcript.txt
+  ├── 2026_06_24_21-31-00_抖音_李四_752311234567/
+  │   └── ...
+  └── download-summary.json
+```
+
+### JSON format
+
+```json
+{
+  "status": "success",
+  "source_url": "https://v.douyin.com/xxxxx",
+  "canonical_url": "https://www.douyin.com/video/740123456789",
+  "video_id": "740123456789",
+  "platform": "抖音",
+  "content_type": "video",
+  "title": "今天给大家分享一个技巧",
+  "description": "这个视频教大家怎么用 AI 提高效率 #AI #效率",
+  "author": {
+    "nickname": "张三",
+    "uid": "MS4wLjABAAAA...",
+    "url": "https://www.douyin.com/user/xxx"
+  },
+  "post_time": "2026-06-20 14:30:00",
+  "duration": 125,
+  "stats": {
+    "play_count": 1000,
+    "digg_count": 1234,
+    "comment_count": 56,
+    "share_count": 78,
+    "collect_count": 90
+  },
+  "transcript": "大家好，今天给大家分享一个非常好用的AI工具...",
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 2.5,
+      "text": "大家好，今天...",
+      "simplified": true
+    }
+  ],
+  "transcript_source": "faster-whisper",
+  "transcription": {
+    "model": "small",
+    "language": "zh",
+    "language_probability": 0.98,
+    "device": "cpu",
+    "compute_type": "int8"
+  }
+}
+```
+
+## Important notes
+
+- First Whisper model use downloads ~500 MB — this is normal, not a hang.
+- Whisper model is loaded once per process and reused across all items.
+- Whisper with `--language zh` may output Traditional Chinese by default; OpenCC auto-converts to Simplified.
+- Transcription is speech-only; OCR of on-screen text is not included.
+- Rerun with the same output directory to resume from `download-state.json`.
+
+## Security
+
+- All processing is local — no data is sent to external services.
+- Only publicly accessible content is processed.
+
+## Boundaries
+
+- Platform: Douyin only.
+- Process only publicly accessible content the user is permitted to access.
+- Do not use third-party online parsing or transcription APIs.
 
 Read [references/troubleshooting.md](references/troubleshooting.md) only when setup, verification, or repeated retry failures occur.

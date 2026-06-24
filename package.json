@@ -1,9 +1,9 @@
 {
   "name": "douyin-batch-download-skill",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Resumable Douyin batch downloader backed by Playwright",
+  "description": "Douyin batch download & local transcription — Playwright + faster-whisper + OpenCC",
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "download": "node scripts/download.mjs"

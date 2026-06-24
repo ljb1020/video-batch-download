@@ -1,21 +1,21 @@
 ---
-name: douyin-batch-download
-description: "Use this skill when the user provides 抖音 分享链接 or URLs and wants to download videos, extract metadata, transcribe audio with local Whisper, convert Traditional→Simplified Chinese, or get structured transcripts as JSON/TXT."
+name: video-batch-download
+description: "Use this skill when the user provides 抖音 (Douyin) or B站 (Bilibili) video URLs and wants to download videos, extract metadata, transcribe audio with local Whisper, convert Traditional→Simplified Chinese, or get structured transcripts as JSON/TXT."
 license: MIT
 metadata:
-    version: "2.0.0"
+    version: "3.0.0"
 ---
 
-# Douyin Batch Download & Transcribe
+# Video Batch Download & Transcribe (Douyin + Bilibili)
 
-Download public Douyin videos and extract transcripts — fully locally, no cloud APIs.
+Download public videos from Douyin and Bilibili, extract transcripts — fully locally, no cloud APIs.
 
 ## When to use
 
-- User pastes one or more 抖音 links and wants the spoken content as text
-- User says "提取文案", "语音转文字", "下载抖音视频", or gives a Douyin URL
-- User wants structured metadata (title, author, stats, post time) from Douyin posts
-- User wants batch download and/or transcription of Douyin videos
+- User pastes one or more 抖音 or B站 links and wants the spoken content as text
+- User says "提取文案", "语音转文字", "下载抖音视频", "下载B站视频", or gives a Douyin/Bilibili URL
+- User wants structured metadata (title, author, stats, post time) from Douyin or Bilibili posts
+- User wants batch download and/or transcription of videos from Douyin or Bilibili
 
 ## First run
 
@@ -38,11 +38,11 @@ Also requires `ffmpeg` on PATH.
 
 ## Workflow
 
-1. **Receive URLs** — User provides one or more Douyin links (or share text containing links). The script auto-extracts valid URLs from any text.
-2. **Ask for output directory** — If user doesn't specify, default to `./douyin_results/`.
+1. **Receive URLs** — User provides one or more Douyin or Bilibili links (or share text containing links). The script auto-extracts valid URLs from any text and routes them to the appropriate platform parser.
+2. **Ask for output directory** — If user doesn't specify, default to `./video_results/`.
 3. **Run the script** — Parallel pipeline:
     - Parse video metadata via Playwright browser interception (parallel, concurrency 3)
-    - Download MP4 via CDN URL (parallel, concurrency 6)
+    - Download MP4 via CDN URL (parallel, concurrency 6). For Bilibili DASH format, downloads video and audio streams separately and merges with ffmpeg.
     - Extract audio with ffmpeg → transcribe with local faster-whisper (serial, GPU-safe)
     - Convert Traditional Chinese to Simplified via OpenCC
     - Write structured JSON + plain text transcript
@@ -68,10 +68,16 @@ node scripts/download.mjs "url1" "url2" "url3"
 node scripts/download.mjs "url" --output ./my_output
 ```
 
+### Mixed platforms
+
+```bash
+node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx"
+```
+
 ### From a text file
 
 ```bash
-node scripts/download.mjs --input links.txt --output ./douyin_results
+node scripts/download.mjs --input links.txt --output ./video_results
 ```
 
 ### Skip transcription (download metadata only)
@@ -105,7 +111,7 @@ node scripts/download.mjs --input links.txt --output ./downloads --headed
 | Parameter | Default | Description |
 |---|---|---|
 | `--input <file>` | — | Read URLs from a UTF-8 text file |
-| `--output <dir>` | `./douyin_results` | Output directory |
+| `--output <dir>` | `./video_results` | Output directory |
 | `--parse-concurrency <n>` | `3` | Concurrent browser parsers |
 | `--download-concurrency <n>` | `6` | Concurrent media downloads |
 | `--max-attempts <n>` | `10` | Retry attempts per item (0 = infinite) |
@@ -134,11 +140,11 @@ node scripts/download.mjs --input links.txt --output ./downloads --headed
 Each video gets its own subdirectory:
 
 ```
-douyin_results/
+video_results/
   ├── 2026_06_24_21-30-00_抖音_张三_740123456789/
   │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.json
   │   └── 2026_06_24_21-30-00_抖音_张三_740123456789_transcript.txt
-  ├── 2026_06_24_21-31-00_抖音_李四_752311234567/
+  ├── 2026_06_24_21-31-00_B站_李四_BV1xx411c7mD/
   │   └── ...
   └── download-summary.json
 ```
@@ -191,6 +197,8 @@ douyin_results/
 
 ## Important notes
 
+- Supports Douyin (抖音) and Bilibili (B站) platforms
+- Bilibili high-quality videos use DASH format (separate video/audio streams) — automatically merged with ffmpeg
 - First Whisper model use downloads ~500 MB — this is normal, not a hang.
 - Whisper model is loaded once per process and reused across all items.
 - Whisper with `--language zh` may output Traditional Chinese by default; OpenCC auto-converts to Simplified.
@@ -204,7 +212,7 @@ douyin_results/
 
 ## Boundaries
 
-- Platform: Douyin only.
+- Platforms: Douyin (抖音) and Bilibili (B站) only.
 - Process only publicly accessible content the user is permitted to access.
 - Do not use third-party online parsing or transcription APIs.
 

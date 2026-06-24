@@ -1,12 +1,14 @@
-# Douyin Batch Download & Transcribe
+# 抖音 & B站 批量下载与转写
 
 > [🇺🇸 English](README.md) | 🇨🇳 中文
 
-批量下载抖音公开视频并提取文案 —— 完全本地化，无需云 API。
+批量下载抖音和B站公开视频并提取文案 —— 完全本地化，无需云 API。
 
 ## 功能特性
 
 - 通过 Playwright 浏览器拦截获取视频 CDN URL（不依赖 yt-dlp 或第三方解析 API）
+- 支持 **抖音** 和 **B站（Bilibili）** 两大平台
+- B站 DASH 格式支持 —— 自动下载并合并分离的视频/音频流
 - 通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 实现本地语音转文字 —— 无需 API Key，无需联网，完全免费
 - 通过 [OpenCC](https://github.com/BYVoid/OpenCC) 自动繁→简中文转换
 - 结构化 JSON 元数据（标题、作者、发布时间、播放/点赞/评论/分享/收藏数）
@@ -42,16 +44,16 @@ pip install -U faster-whisper opencc
 
 **方式一：直接跟 AI 说（最省事）**
 
-> "帮我安装这个 skill：https://github.com/user/douyin-batch-download"
+> "帮我安装这个 skill：https://github.com/user/video-batch-download"
 
 **方式二：git clone**
 
 ```bash
 # Linux/macOS
-git clone https://github.com/user/douyin-batch-download.git ~/.claude/skills/douyin-batch-download
+git clone https://github.com/user/video-batch-download.git ~/.claude/skills/video-batch-download
 
 # Windows
-git clone https://github.com/user/douyin-batch-download.git %USERPROFILE%\.claude\skills\douyin-batch-download
+git clone https://github.com/user/video-batch-download.git %USERPROFILE%\.claude\skills\video-batch-download
 ```
 
 ## 使用方法
@@ -59,17 +61,18 @@ git clone https://github.com/user/douyin-batch-download.git %USERPROFILE%\.claud
 ### 命令行（CLI）
 
 ```bash
-# 单个链接或分享文本
+# 单个链接（抖音或B站）
 node scripts/download.mjs "https://v.douyin.com/xxxxx"
+node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
 
-# 多个链接
+# 多个链接（支持混合平台）
 node scripts/download.mjs "url1" "url2" "url3"
 
 # 自定义输出目录
 node scripts/download.mjs "url" --output ./my_output
 
 # 从文本文件读取链接
-node scripts/download.mjs --input links.txt --output ./douyin_results
+node scripts/download.mjs --input links.txt --output ./video_results
 
 # 跳过转写（仅下载元数据）
 node scripts/download.mjs "url" --no-transcribe
@@ -80,9 +83,10 @@ node scripts/download.mjs "url" --device cuda --compute-type float16 --model lar
 
 ### 在 Claude Code 中使用
 
-直接粘贴抖音链接并要求提取文案：
+直接粘贴抖音或B站链接并要求提取文案：
 
 > "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
+> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
 
 ## 工作原理
 
@@ -94,6 +98,8 @@ Playwright 浏览器解析 → 提取视频元数据 + 拦截 CDN URL
 ┌─ Worker 1: 下载 MP4 ──┐
 ├─ Worker 2: 下载 MP4 ──┤  （并行，6 并发）
 └─ Worker 3: 下载 MP4 ──┘
+    ↓
+（B站 DASH: ffmpeg 合并视频+音频流）
     ↓
 ffmpeg 提取音频 → 16kHz mono WAV
     ↓
@@ -109,11 +115,11 @@ OpenCC 繁→简中文转换
 每个视频一个独立目录：
 
 ```
-douyin_results/
+video_results/
   ├── 2026_06_24_21-30-00_抖音_张三_740123456789/
   │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.json
   │   └── 2026_06_24_21-30-00_抖音_张三_740123456789_transcript.txt
-  ├── 2026_06_24_21-31-00_抖音_李四_752311234567/
+  ├── 2026_06_24_21-31-00_B站_李四_BV1xx411c7mD/
   │   └── ...
   └── download-summary.json
 ```
@@ -171,7 +177,7 @@ douyin_results/
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--input <file>` | — | 从 UTF-8 文本文件读取链接 |
-| `--output <dir>` | `./douyin_results` | 输出目录 |
+| `--output <dir>` | `./video_results` | 输出目录 |
 | `--parse-concurrency <n>` | `3` | 并发浏览器解析数 |
 | `--download-concurrency <n>` | `6` | 并发下载数 |
 | `--max-attempts <n>` | `10` | 每条链接重试次数（0 = 无限重试） |
@@ -197,8 +203,9 @@ douyin_results/
 
 ## 本工具的特性
 
-- 通过浏览器拦截获取抖音视频 CDN URL
-- 从抖音 detail API 提取元数据（标题、作者、发布时间、统计数据）
+- 支持抖音和B站两大平台的视频下载
+- 抖音：拦截 detail API 获取元数据，拦截 CDN 获取视频 URL
+- B站：拦截 view/playurl API 获取元数据和流媒体 URL，自动处理 DASH 格式
 - 使用 faster-whisper（本地离线）将音频转为文字
 - 将繁体中文输出转换为简体中文
 - 本地保存结构化 JSON 和纯文本转写
@@ -214,8 +221,9 @@ douyin_results/
 
 - 首次使用 Whisper 模型会下载约 500 MB —— 这是正常现象，不是卡住
 - CPU 转写：1 分钟音频约 12 秒（GPU：约 0.4 秒）
-- 平台范围：仅限抖音
+- 平台范围：抖音和B站
 - 部分视频可能触发验证码 —— 使用 `--headed` 模式
+- B站高画质视频需要 ffmpeg 合并 DASH 流
 
 ## 开源协议
 

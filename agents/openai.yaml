@@ -1,4 +1,0 @@
-interface:
-  display_name: "抖音批量下载"
-  short_description: "Reliably batch-download public Douyin videos"
-  default_prompt: "Use $douyin-batch-download to reliably download these Douyin share links."

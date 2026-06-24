@@ -1,8 +1,11 @@
 node_modules/
 downloads/
 douyin_results/
+video_results/
 download-state.json
+download-summary.json
 *.part
 *.wav
+*.m4s
 playwright-report/
 test-results/

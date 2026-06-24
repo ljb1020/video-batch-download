@@ -1,12 +1,14 @@
-# Douyin Batch Download & Transcribe
+# Douyin & Bilibili Batch Download & Transcribe
 
 > [🇺🇸 English](README.md) | [🇨🇳 中文](README_zh.md)
 
-Download public Douyin videos and extract transcripts — fully locally, no cloud APIs.
+Download public videos from Douyin and Bilibili, extract transcripts — fully locally, no cloud APIs.
 
 ## Features
 
 - Browser-based video URL interception via Playwright (no yt-dlp, no third-party APIs)
+- Supports **Douyin (抖音)** and **Bilibili (B站)** platforms
+- Bilibili DASH format support — automatically downloads and merges separate video/audio streams
 - Local speech-to-text via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — no API key, no network, fully free
 - Automatic Traditional → Simplified Chinese conversion via [OpenCC](https://github.com/BYVoid/OpenCC)
 - Structured JSON metadata (title, author, post time, stats)
@@ -42,16 +44,16 @@ pip install -U faster-whisper opencc
 
 **Option A: Tell your AI assistant (easiest)**
 
-> "Install this skill: https://github.com/user/douyin-batch-download"
+> "Install this skill: https://github.com/user/video-batch-download"
 
 **Option B: git clone**
 
 ```bash
 # Linux/macOS
-git clone https://github.com/user/douyin-batch-download.git ~/.claude/skills/douyin-batch-download
+git clone https://github.com/user/video-batch-download.git ~/.claude/skills/video-batch-download
 
 # Windows
-git clone https://github.com/user/douyin-batch-download.git %USERPROFILE%\.claude\skills\douyin-batch-download
+git clone https://github.com/user/video-batch-download.git %USERPROFILE%\.claude\skills\video-batch-download
 ```
 
 ## Usage
@@ -59,10 +61,11 @@ git clone https://github.com/user/douyin-batch-download.git %USERPROFILE%\.claud
 ### CLI
 
 ```bash
-# Single URL (or share text with embedded URL)
+# Single URL (Douyin or Bilibili)
 node scripts/download.mjs "https://v.douyin.com/xxxxx"
+node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
 
-# Multiple URLs
+# Multiple URLs (mixed platforms supported)
 node scripts/download.mjs "url1" "url2" "url3"
 
 # Custom output directory
@@ -80,9 +83,10 @@ node scripts/download.mjs "url" --device cuda --compute-type float16 --model lar
 
 ### In Claude Code
 
-Paste Douyin links and ask for transcript extraction:
+Paste Douyin or Bilibili links and ask for transcript extraction:
 
 > "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
+> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
 
 ## How it works
 
@@ -94,6 +98,8 @@ Playwright browser → parse video metadata + intercept CDN URL
 ┌─ Worker 1: download MP4 ──┐
 ├─ Worker 2: download MP4 ──┤  (parallel, concurrency 6)
 └─ Worker 3: download MP4 ──┘
+    ↓
+(Bilibili DASH: merge video+audio streams with ffmpeg)
     ↓
 ffmpeg extract audio → 16kHz mono WAV
     ↓
@@ -109,11 +115,11 @@ Output: JSON + TXT
 Each video gets its own subdirectory:
 
 ```
-douyin_results/
+video_results/
   ├── 2026_06_24_21-30-00_抖音_张三_740123456789/
   │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.json
   │   └── 2026_06_24_21-30-00_抖音_张三_740123456789_transcript.txt
-  ├── 2026_06_24_21-31-00_抖音_李四_752311234567/
+  ├── 2026_06_24_21-31-00_B站_李四_BV1xx411c7mD/
   │   └── ...
   └── download-summary.json
 ```
@@ -171,7 +177,7 @@ douyin_results/
 | Parameter | Default | Description |
 |---|---|---|
 | `--input <file>` | — | Read URLs from a UTF-8 text file |
-| `--output <dir>` | `./douyin_results` | Output directory |
+| `--output <dir>` | `./video_results` | Output directory |
 | `--parse-concurrency <n>` | `3` | Concurrent browser parsers |
 | `--download-concurrency <n>` | `6` | Concurrent media downloads |
 | `--max-attempts <n>` | `10` | Retry attempts per item (0 = infinite) |
@@ -214,8 +220,9 @@ douyin_results/
 
 - First Whisper model use downloads ~500 MB — this is normal, not a hang
 - CPU transcription: ~12 seconds per minute of audio (GPU: ~0.4 seconds)
-- Platform: Douyin only
+- Platforms: Douyin and Bilibili only
 - Some videos may require verification challenges — use `--headed` mode
+- Bilibili high-quality videos require ffmpeg for DASH stream merging
 
 ## License
 

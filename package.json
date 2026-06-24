@@ -1,0 +1,17 @@
+{
+  "name": "douyin-batch-download-skill",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Resumable Douyin batch downloader backed by Playwright",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "download": "node scripts/download.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.53.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

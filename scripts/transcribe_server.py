@@ -53,7 +53,7 @@ def load_whisper(model_name: str, device: str, compute_type: str):
 
 def transcribe(model, audio_path, language=None):
     seg_iter, detected = model.transcribe(
-        audio_path, language=language, beam_size=1, vad_filter=True
+        audio_path, language=language, beam_size=5, vad_filter=False
     )
     segments = []
     for s in seg_iter:

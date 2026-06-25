@@ -212,6 +212,7 @@ video_results/
 - Xiaohongshu: video notes only; image/text notes are not supported
 - First Whisper model use downloads ~500 MB — this is normal, not a hang.
 - Whisper model is loaded once per process and reused across all items.
+- **Transcription optimization**: beam_size=5 (beam search) and VAD disabled for higher accuracy. Speed is ~2-3x slower than greedy decoding but significantly reduces hallucinations and errors.
 - Whisper with `--language zh` may output Traditional Chinese by default; OpenCC auto-converts to Simplified.
 - Transcription is speech-only; OCR of on-screen text is not included.
 - Rerun with the same output directory to resume from `download-state.json`.

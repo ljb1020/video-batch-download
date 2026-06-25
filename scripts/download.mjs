@@ -738,6 +738,38 @@ async function main() {
     console.log("[phase 1] browser closed\n");
   }
 
+  // Phase 1.5: Write outputs for downloaded items (skip-transcribe mode)
+  if (!options.transcribe) {
+    const urls = urlsWithParsers.map((item) => item.url);
+    const downloaded = urls
+      .map((url) => ({ url, state: store.get(url) }))
+      .filter((item) => item.state?.status === "downloaded" && item.state?.filePath && item.state?.parsed);
+
+    if (downloaded.length > 0) {
+      console.log(`[phase 1.5] writing outputs for ${downloaded.length} video(s) (transcription skipped)...`);
+      for (const { url, state } of downloaded) {
+        try {
+          const { jsonPath } = writeOutputs(
+            state.parsed,
+            null,
+            { filePath: state.filePath, bytes: state.bytes },
+            options.output
+          );
+          await store.update(url, {
+            status: "completed",
+            jsonPath,
+            hasTranscript: false,
+            lastError: null,
+          });
+          console.log(`  completed: ${jsonPath}`);
+        } catch (err) {
+          console.warn(`  failed to write output for ${url}: ${err.message}`);
+          await store.update(url, { status: "failed", lastError: err.message });
+        }
+      }
+    }
+  }
+
   // Phase 2: Transcribe
   if (options.transcribe) {
     const urls = urlsWithParsers.map((item) => item.url);

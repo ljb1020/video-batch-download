@@ -73,6 +73,30 @@ export class BilibiliParser extends PlatformParser {
         permanentReason = bodyText.match(/视频不存在|已被删除|审核中|仅限港澳台地区/u)?.[0];
       }
 
+      // B站 view API 未登录时只返回 { judge: ... }，缺少核心字段
+      // 从页面 __INITIAL_STATE__ 兜底提取元数据
+      const hasFullMeta = viewApiData && viewApiData.bvid && viewApiData.title;
+      if (!hasFullMeta) {
+        const pageState = await page.evaluate(() => {
+          const s = window.__INITIAL_STATE__;
+          if (!s || !s.videoData) return null;
+          const vd = s.videoData;
+          return {
+            bvid: vd.bvid,
+            aid: vd.aid,
+            title: vd.title,
+            desc: vd.desc,
+            duration: vd.duration,
+            pubdate: vd.pubdate,
+            stat: vd.stat,
+            owner: vd.owner,
+          };
+        }).catch(() => null);
+        if (pageState) {
+          viewApiData = { ...(viewApiData ?? {}), ...pageState };
+        }
+      }
+
       if (!viewApiData) {
         const reason = permanentReason ?? "No Bilibili view API response";
         const error = new Error(reason);
@@ -86,8 +110,9 @@ export class BilibiliParser extends PlatformParser {
         throw err;
       }
 
-      // Extract video ID (bvid or aid)
-      const videoId = viewApiData.bvid ?? (viewApiData.aid != null ? `av${viewApiData.aid}` : null) ?? itemKey(url);
+      // Extract video ID (bvid or aid, with URL-based fallback)
+      const urlBvid = url.match(/(BV[\w]+)/i)?.[1] ?? null;
+      const videoId = viewApiData.bvid ?? urlBvid ?? (viewApiData.aid != null ? `av${viewApiData.aid}` : null) ?? itemKey(url);
 
       // Parse metadata
       const author = {

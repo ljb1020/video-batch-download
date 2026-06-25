@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import fsp from "node:fs/promises";
+import { spawn } from "node:child_process";
+import path from "node:path";
 
 const RETRY_DELAYS_MS = [2_000, 5_000, 10_000, 20_000, 40_000, 60_000, 90_000, 120_000];
 const MIN_VALID_FILE_SIZE = 1_024;
@@ -63,4 +65,81 @@ export async function isValidMp4(filePath) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Get video metadata using ffprobe.
+ * @param {string} filePath - Path to video file
+ * @param {string|null} ffmpegPath - Path to ffmpeg (ffprobe assumed in same dir)
+ * @returns {Promise<{width: number, height: number, bitrate_kbps: number, duration_secs: number, codec: string, format: string} | null>}
+ */
+export async function getVideoInfo(filePath, ffmpegPath = null) {
+  // Resolve ffprobe path from ffmpeg path
+  let ffprobeExe;
+  if (ffmpegPath) {
+    const dir = path.dirname(ffmpegPath);
+    ffprobeExe = path.join(dir, process.platform === "win32" ? "ffprobe.exe" : "ffprobe");
+  } else {
+    ffprobeExe = "ffprobe";
+  }
+
+  return new Promise((resolve) => {
+    const args = [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width,height,codec_name,bit_rate,duration",
+      "-show_entries", "format=duration,bit_rate",
+      "-of", "json",
+      filePath,
+    ];
+
+    const child = spawn(ffprobeExe, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+    });
+
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        resolve(null);
+        return;
+      }
+
+      try {
+        const data = JSON.parse(stdout);
+        const stream = data.streams?.[0] ?? {};
+        const format = data.format ?? {};
+
+        const width = stream.width ?? 0;
+        const height = stream.height ?? 0;
+        const codec = stream.codec_name ?? "unknown";
+
+        // Bitrate: prefer stream, fallback to format
+        const bitrateBps = Number(stream.bit_rate ?? format.bit_rate ?? 0);
+        const bitrateKbps = bitrateBps > 0 ? Math.round(bitrateBps / 1000) : 0;
+
+        // Duration: prefer stream, fallback to format
+        const durationSecs = Number(stream.duration ?? format.duration ?? 0);
+
+        // Format name
+        const formatName = format.format_name ?? "unknown";
+
+        resolve({
+          width,
+          height,
+          resolution: width && height ? `${width}x${height}` : null,
+          bitrate_kbps: bitrateKbps || null,
+          duration_secs: durationSecs > 0 ? Math.round(durationSecs * 10) / 10 : null,
+          codec,
+          format: formatName,
+        });
+      } catch {
+        resolve(null);
+      }
+    });
+
+    child.on("error", () => resolve(null));
+  });
 }

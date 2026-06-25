@@ -8,7 +8,7 @@ import process from "node:process";
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 
-import { sleep, retryDelay, safeFilename, isValidMp4, USER_AGENT } from "./utils/common.js";
+import { sleep, retryDelay, safeFilename, isValidMp4, getVideoInfo, USER_AGENT } from "./utils/common.js";
 import { Semaphore } from "./utils/semaphore.js";
 import { StateStore } from "./utils/state-store.js";
 import { BrowserManager } from "./utils/browser-manager.js";
@@ -511,7 +511,7 @@ async function transcribeAudio(wavPath, options) {
 // Output
 // ---------------------------------------------------------------------------
 
-function writeOutputs(parsed, transcribeResult, mp4Info, outputDir) {
+function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}) {
   const now = new Date();
   const timeStr = now.toISOString().replace("T", "_").replace(/[:.]/g, "-").slice(0, 19);
   const authorName = safeFilename(parsed.author?.nickname ?? "", 20);
@@ -542,6 +542,7 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir) {
     segments: segments,
     transcript_source: tMeta ? "faster-whisper" : null,
     transcription: tMeta,
+    media_info: null, // Will be filled by ffprobe
     output_file: null,
     transcript_file: null,
   };
@@ -554,6 +555,32 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir) {
     const txtPath = path.join(itemDir, `${base}_transcript.txt`);
     fs.writeFileSync(txtPath, transcript + "\n", "utf8");
     result.transcript_file = txtPath;
+  }
+
+  return { result, itemDir, jsonPath };
+}
+
+async function writeOutputsWithMediaInfo(parsed, transcribeResult, mp4Info, outputDir, options = {}) {
+  const { result, itemDir, jsonPath } = writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options);
+
+  // Probe video file for resolution/bitrate
+  if (mp4Info?.filePath) {
+    try {
+      const mediaInfo = await getVideoInfo(mp4Info.filePath, options.ffmpegPath ?? null);
+      if (mediaInfo) {
+        result.media_info = mediaInfo;
+        // Re-write JSON with media_info
+        fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), "utf8");
+
+        // Log quality info
+        const res = mediaInfo.resolution ?? "unknown";
+        const bitrate = mediaInfo.bitrate_kbps ? `${mediaInfo.bitrate_kbps} kbps` : "unknown";
+        const codec = mediaInfo.codec ?? "unknown";
+        console.log(`    [media] ${res}, ${bitrate}, ${codec}`);
+      }
+    } catch (err) {
+      console.warn(`    [media] ffprobe failed: ${err.message}`);
+    }
   }
 
   return { result, itemDir, jsonPath };
@@ -749,11 +776,12 @@ async function main() {
       console.log(`[phase 1.5] writing outputs for ${downloaded.length} video(s) (transcription skipped)...`);
       for (const { url, state } of downloaded) {
         try {
-          const { jsonPath } = writeOutputs(
+          const { jsonPath } = await writeOutputsWithMediaInfo(
             state.parsed,
             null,
             { filePath: state.filePath, bytes: state.bytes },
-            options.output
+            options.output,
+            options
           );
           await store.update(url, {
             status: "completed",
@@ -807,11 +835,12 @@ async function main() {
               transcribeAudio(wavPath, options)
             );
 
-            const { jsonPath } = writeOutputs(
+            const { jsonPath } = await writeOutputsWithMediaInfo(
               state.parsed,
               transcribeResult,
               { filePath: state.filePath, bytes: state.bytes },
-              options.output
+              options.output,
+              options
             );
 
             await store.update(url, {
@@ -824,11 +853,12 @@ async function main() {
           } catch (err) {
             console.warn(`${label} transcribe failed: ${err.message}`);
             try {
-              const { jsonPath } = writeOutputs(
+              const { jsonPath } = await writeOutputsWithMediaInfo(
                 state.parsed,
                 null,
                 { filePath: state.filePath, bytes: state.bytes },
-                options.output
+                options.output,
+                options
               );
               await store.update(url, {
                 status: "completed",

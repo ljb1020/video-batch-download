@@ -192,6 +192,15 @@ video_results/
     "language_probability": 0.98,
     "device": "cpu",
     "compute_type": "int8"
+  },
+  "media_info": {
+    "width": 1080,
+    "height": 1920,
+    "resolution": "1080x1920",
+    "bitrate_kbps": 2500,
+    "duration_secs": 125.5,
+    "codec": "h264",
+    "format": "mov,mp4,m4a,3gp,3g2,mj2"
   }
 }
 ```

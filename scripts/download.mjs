@@ -8,7 +8,7 @@ import process from "node:process";
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 
-import { sleep, retryDelay, safeFilename, isValidMp4 } from "./utils/common.js";
+import { sleep, retryDelay, safeFilename, isValidMp4, USER_AGENT } from "./utils/common.js";
 import { Semaphore } from "./utils/semaphore.js";
 import { StateStore } from "./utils/state-store.js";
 import { BrowserManager } from "./utils/browser-manager.js";
@@ -23,7 +23,7 @@ Download options:
   --input <file>                 Read share text/URLs from a UTF-8 file
   --output <dir>                 Output directory (default: ./video_results)
   --parse-concurrency <n>        Concurrent browser parsers (default: 3)
-  --download-concurrency <n>     Concurrent media downloads (default: 6)
+  --download-concurrency <n>     Concurrent media downloads (default: 1)
   --max-attempts <n>             Attempts per item; 0 retries forever (default: 10)
   --page-timeout <seconds>       Page navigation timeout (default: 45)
   --media-wait <seconds>         Wait for media after navigation (default: 25)
@@ -59,7 +59,7 @@ function parseArgs(argv) {
     input: null,
     output: path.resolve("video_results"),
     parseConcurrency: 3,
-    downloadConcurrency: 6,
+    downloadConcurrency: 1,
     maxAttempts: 10,
     pageTimeoutMs: 45_000,
     mediaWaitMs: 25_000,
@@ -69,9 +69,9 @@ function parseArgs(argv) {
     // Transcription
     transcribe: true,
     model: "small",
-    language: "zh",
-    device: "cuda",
-    computeType: "float16",
+    language: "auto",
+    device: "cpu",
+    computeType: "int8",
     simplify: true,
     ffmpegPath: null,
     transcribeTimeoutMs: 600_000,
@@ -116,7 +116,9 @@ function parseArgs(argv) {
 // Download (multi-stream support)
 // ---------------------------------------------------------------------------
 
-async function downloadSingleStream(stream, videoId, suffix, outputDir, timeoutMs, platform) {
+const _activeChildren = new Set();
+
+async function downloadSingleStream(stream, videoId, suffix, outputDir, timeoutMs) {
   const tmpDir = path.join(outputDir, ".temp");
   await fsp.mkdir(tmpDir, { recursive: true });
   const ext = stream.format === "m4s" ? "m4s" : "mp4";
@@ -134,13 +136,13 @@ async function downloadSingleStream(stream, videoId, suffix, outputDir, timeoutM
   const timer = setTimeout(() => controller.abort(new Error("Download timeout")), timeoutMs);
 
   try {
-    const referer = platform === "抖音" ? "https://www.douyin.com/" : "https://www.bilibili.com/";
+    const referer = stream.referer ?? "https://www.google.com/";
     const response = await fetch(stream.url, {
       redirect: "follow",
       signal: controller.signal,
       headers: {
         Referer: referer,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "User-Agent": USER_AGENT,
         Accept: "video/mp4,video/*;q=0.9,*/*;q=0.8",
       },
     });
@@ -151,7 +153,6 @@ async function downloadSingleStream(stream, videoId, suffix, outputDir, timeoutM
 
     const output = fs.createWriteStream(partialPath, { flags: "wx" });
     const readable = Readable.fromWeb(response.body);
-    readable.on("error", () => {});
     await finished(readable.pipe(output));
 
     const stat = await fsp.stat(partialPath);
@@ -178,6 +179,60 @@ async function downloadSingleStream(stream, videoId, suffix, outputDir, timeoutM
   }
 }
 
+async function hasAudioTrack(filePath, ffmpegPath) {
+  // Try ffprobe first (more reliable)
+  const ffprobePath = ffmpegPath
+    ? path.join(path.dirname(ffmpegPath), process.platform === "win32" ? "ffprobe.exe" : "ffprobe")
+    : "ffprobe";
+
+  const tryFfprobe = () => new Promise((resolve) => {
+    const args = [
+      "-v", "error",
+      "-select_streams", "a:0",
+      "-show_entries", "stream=codec_type",
+      "-of", "csv=p=0",
+      filePath,
+    ];
+
+    const child = spawn(ffprobePath, args, { stdio: ["ignore", "pipe", "pipe"] });
+    _activeChildren.add(child);
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.on("close", (code) => {
+      _activeChildren.delete(child);
+      if (code === 0) {
+        resolve(stdout.trim().includes("audio"));
+      } else {
+        resolve(null); // ffprobe failed, try ffmpeg
+      }
+    });
+    child.on("error", () => { _activeChildren.delete(child); resolve(null); }); // ffprobe not found
+  });
+
+  const tryFfmpeg = () => new Promise((resolve) => {
+    const exe = ffmpegPath || "ffmpeg";
+    const args = ["-i", filePath, "-hide_banner", "-f", "null", "-"];
+    const child = spawn(exe, args, { stdio: ["ignore", "pipe", "pipe"] });
+    _activeChildren.add(child);
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("close", () => {
+      _activeChildren.delete(child);
+      const hasAudio = stderr.includes("Audio:") ||
+                       (stderr.includes("Stream #") && stderr.includes("audio"));
+      resolve(hasAudio);
+    });
+    child.on("error", () => { _activeChildren.delete(child); resolve(false); }); // ffmpeg not found
+  });
+
+  // Try ffprobe first, then ffmpeg
+  const ffprobeResult = await tryFfprobe();
+  if (ffprobeResult !== null) return ffprobeResult;
+
+  // Fallback to ffmpeg
+  return await tryFfmpeg();
+}
+
 async function mergeStreams(videoPath, audioPath, videoId, outputDir, ffmpegPath) {
   const mergedPath = path.join(outputDir, ".temp", `${videoId}.mp4`);
   const exe = ffmpegPath || "ffmpeg";
@@ -185,38 +240,48 @@ async function mergeStreams(videoPath, audioPath, videoId, outputDir, ffmpegPath
     "-hide_banner", "-loglevel", "error", "-y",
     "-i", videoPath,
     "-i", audioPath,
-    "-c", "copy",
+    "-c:v", "copy",
+    "-c:a", "aac",
+    "-movflags", "+faststart",
     mergedPath,
   ];
 
   return new Promise((resolve, reject) => {
     const child = spawn(exe, args, { stdio: ["ignore", "pipe", "pipe"] });
+    _activeChildren.add(child);
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", (code) => {
+      _activeChildren.delete(child);
       if (code === 0) resolve(mergedPath);
-      else reject(new Error(`ffmpeg merge failed (exit ${code}): ${stderr.trim()}`));
+      else {
+        const err = new Error(`ffmpeg merge failed (exit ${code}): ${stderr.trim()}`);
+        err.permanent = true;
+        reject(err);
+      }
     });
-    child.on("error", (err) => reject(new Error(`ffmpeg spawn error: ${err.message}`)));
+    child.on("error", (err) => {
+      _activeChildren.delete(child);
+      reject(new Error(`ffmpeg spawn error: ${err.message}`));
+    });
   });
 }
 
 async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
   const streams = parsed.mediaStreams;
 
-  // Single stream (Douyin or Bilibili fallback)
+  // Single stream (e.g., Douyin or Bilibili durl fallback)
   if (streams.length === 1 && streams[0].type === "video+audio") {
     return await downloadSingleStream(
       streams[0],
       parsed.videoId,
       "",
       outputDir,
-      timeoutMs,
-      parsed.platform
+      timeoutMs
     );
   }
 
-  // Multi-stream (Bilibili DASH)
+  // Multi-stream (e.g., Bilibili DASH)
   const videoStream = streams.find((s) => s.type === "video");
   const audioStream = streams.find((s) => s.type === "audio");
 
@@ -224,26 +289,46 @@ async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
     throw new Error("Invalid multi-stream: missing video or audio");
   }
 
-  const [videoFile, audioFile] = await Promise.all([
-    downloadSingleStream(videoStream, parsed.videoId, "_video", outputDir, timeoutMs, parsed.platform),
-    downloadSingleStream(audioStream, parsed.videoId, "_audio", outputDir, timeoutMs, parsed.platform),
-  ]);
+  let videoFile = null;
+  let audioFile = null;
+  let mergedPath = null;
 
-  // Merge with ffmpeg
-  const mergedPath = await mergeStreams(
-    videoFile.filePath,
-    audioFile.filePath,
-    parsed.videoId,
-    outputDir,
-    ffmpegPath
-  );
+  try {
+    [videoFile, audioFile] = await Promise.all([
+      downloadSingleStream(videoStream, parsed.videoId, "_video", outputDir, timeoutMs),
+      downloadSingleStream(audioStream, parsed.videoId, "_audio", outputDir, timeoutMs),
+    ]);
 
-  // Clean up intermediate files
-  await fsp.rm(videoFile.filePath, { force: true });
-  await fsp.rm(audioFile.filePath, { force: true });
+    // Merge with ffmpeg
+    mergedPath = await mergeStreams(
+      videoFile.filePath,
+      audioFile.filePath,
+      parsed.videoId,
+      outputDir,
+      ffmpegPath
+    );
 
-  const stat = await fsp.stat(mergedPath);
-  return { filePath: mergedPath, bytes: stat.size, skipped: false };
+    // Verify audio track exists
+    const audioOk = await hasAudioTrack(mergedPath, ffmpegPath);
+    if (!audioOk) {
+      const err = new Error("Merged video has no audio track");
+      err.permanent = true;
+      throw err;
+    }
+
+    // Clean up intermediate files
+    await fsp.rm(videoFile.filePath, { force: true });
+    await fsp.rm(audioFile.filePath, { force: true });
+
+    const stat = await fsp.stat(mergedPath);
+    return { filePath: mergedPath, bytes: stat.size, skipped: false };
+  } catch (error) {
+    // Clean up intermediate files on any failure
+    if (videoFile?.filePath) await fsp.rm(videoFile.filePath, { force: true }).catch(() => {});
+    if (audioFile?.filePath) await fsp.rm(audioFile.filePath, { force: true }).catch(() => {});
+    if (mergedPath) await fsp.rm(mergedPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -262,13 +347,18 @@ async function extractAudio(mp4Path, ffmpegPath) {
 
   return new Promise((resolve, reject) => {
     const child = spawn(exe, args, { stdio: ["ignore", "pipe", "pipe"] });
+    _activeChildren.add(child);
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", (code) => {
+      _activeChildren.delete(child);
       if (code === 0) resolve(wavPath);
       else reject(new Error(`ffmpeg failed (exit ${code}): ${stderr.trim()}`));
     });
-    child.on("error", (err) => reject(new Error(`ffmpeg spawn error: ${err.message}`)));
+    child.on("error", (err) => {
+      _activeChildren.delete(child);
+      reject(new Error(`ffmpeg spawn error: ${err.message}`));
+    });
   });
 }
 
@@ -290,18 +380,34 @@ function getScriptDir() {
 function spawnTranscribeServer(options) {
   const scriptDir = getScriptDir();
   const serverPath = path.join(scriptDir, "transcribe_server.py");
-  const pyExe = process.platform === "win32" ? "python" : "python3";
 
-  const proc = spawn(pyExe, [
-    serverPath,
-    "--model", options.model,
-    "--device", options.device,
-    "--compute-type", options.computeType,
-  ], {
-    stdio: ["pipe", "pipe", "pipe"],
-    cwd: scriptDir,
-    env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-  });
+  // Try python3 (Unix), python (Windows), then py (Windows Launcher)
+  const candidates = process.platform === "win32"
+    ? ["python", "py"]
+    : ["python3", "python"];
+
+  let proc = null;
+  let lastErr = null;
+  for (const pyExe of candidates) {
+    try {
+      proc = spawn(pyExe, [
+        serverPath,
+        "--model", options.model,
+        "--device", options.device,
+        "--compute-type", options.computeType,
+      ], {
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: scriptDir,
+        env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+      });
+      _activeChildren.add(proc);
+      proc.once("close", () => _activeChildren.delete(proc));
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!proc) throw new Error(`Cannot find Python executable (tried: ${candidates.join(", ")}): ${lastErr?.message}`);
 
   _transcribeReadyPromise = new Promise((resolve, reject) => {
     proc.stderr.on("data", (chunk) => {
@@ -316,10 +422,11 @@ function spawnTranscribeServer(options) {
       if (!_transcribeReady) reject(new Error(`transcribe_server spawn error: ${err.message}`));
     });
     proc.once("close", (code) => {
+      const wasReady = _transcribeReady;
       _transcribeProc = null;
       _transcribeReady = false;
       const err = new Error(`transcribe_server exited (code ${code})`);
-      if (!_transcribeReady) reject(err);
+      if (!wasReady) reject(err);
       while (_transcribeResolvers.length) _transcribeResolvers.shift()({ error: err.message });
     });
   });
@@ -349,13 +456,14 @@ function spawnTranscribeServer(options) {
 
 function stopTranscribeServer() {
   if (!_transcribeProc) return;
+  const proc = _transcribeProc;
   try {
-    _transcribeProc.stdin.write(JSON.stringify({ stop: true }) + "\n");
-    _transcribeProc.stdin.end();
+    proc.stdin.write(JSON.stringify({ stop: true }) + "\n");
+    proc.stdin.end();
   } catch {}
   setTimeout(() => {
     try {
-      _transcribeProc.kill("SIGTERM");
+      proc.kill("SIGTERM");
     } catch {}
   }, 3000);
   _transcribeProc = null;
@@ -391,6 +499,9 @@ async function transcribeAudio(wavPath, options) {
       _transcribeProc.stdin.write(JSON.stringify(req) + "\n");
     } catch (err) {
       clearTimeout(timer);
+      // Remove the resolver we just pushed to prevent mismatch
+      const idx = _transcribeResolvers.indexOf(resolver);
+      if (idx !== -1) _transcribeResolvers.splice(idx, 1);
       reject(new Error(`write to server failed: ${err.message}`));
     }
   });
@@ -491,6 +602,7 @@ async function main() {
 
   let inputText = options.texts.join("\n");
   if (options.input) inputText += `\n${await fsp.readFile(options.input, "utf8")}`;
+  inputText = inputText.replace(/^﻿/, ""); // strip UTF-8 BOM
 
   const urlsWithParsers = extractAndRouteUrls(inputText);
   if (urlsWithParsers.length === 0) {
@@ -515,6 +627,9 @@ async function main() {
     stopping = true;
     console.log("\nStopping after current operations...");
     stopTranscribeServer();
+    for (const child of _activeChildren) {
+      try { child.kill("SIGTERM"); } catch {}
+    }
     await browserManager.close();
   };
   process.once("SIGINT", stop);
@@ -592,7 +707,7 @@ async function main() {
         console.warn(`${label} ${status}: ${error.message}`);
 
         if (permanent) {
-          writeFailedOutput(url, error.message, "permanent", options.output);
+          writeFailedOutput(url, error.message, "permanent", options.output, ParserClass.getPlatformName());
           results.push({ url, status, attempt, error: error.message });
           return;
         }
@@ -604,7 +719,7 @@ async function main() {
 
     const lastError = store.get(url)?.lastError ?? (stopping ? "Interrupted" : "Attempts exhausted");
     await store.update(url, { status: "failed", attempt, lastError });
-    writeFailedOutput(url, lastError, "exhausted", options.output);
+    writeFailedOutput(url, lastError, "exhausted", options.output, ParserClass.getPlatformName());
     results.push({ url, status: "failed", attempt, error: lastError });
   }
 
@@ -613,6 +728,7 @@ async function main() {
       urlsWithParsers.map((item, index) =>
         processDownload(item, index).catch((error) => {
           console.error(`[${index + 1}/${urlsWithParsers.length}] unexpected error: ${error.message}`);
+          writeFailedOutput(item.url, error.message, "unexpected", options.output, item.ParserClass.getPlatformName());
           results.push({ url: item.url, status: "failed", error: error.message });
         })
       )
@@ -634,64 +750,71 @@ async function main() {
     } else {
       console.log(`[phase 2] transcribing ${downloaded.length} video(s)...`);
 
+      let serverReady = true;
       try {
         await spawnTranscribeServer(options);
       } catch (err) {
         console.error(`[phase 2] failed to start transcribe server: ${err.message}`);
+        serverReady = false;
       }
 
-      for (let i = 0; i < downloaded.length; i++) {
-        if (stopping) break;
-        const { url, state } = downloaded[i];
-        const label = `[${i + 1}/${downloaded.length}]`;
+      if (serverReady) {
+        for (let i = 0; i < downloaded.length; i++) {
+          if (stopping) break;
+          const { url, state } = downloaded[i];
+          const label = `[${i + 1}/${downloaded.length}]`;
+          let wavPath = null;
 
-        try {
-          await store.update(url, { status: "transcribing" });
-          console.log(`${label} extracting audio...`);
-          const wavPath = await extractAudio(state.filePath, options.ffmpegPath);
-          console.log(`${label} transcribing (${options.model}, ${options.device})...`);
-
-          const transcribeResult = await transcribeSemaphore.use(() =>
-            transcribeAudio(wavPath, options)
-          );
-
-          const { result: outputResult, jsonPath } = writeOutputs(
-            state.parsed,
-            transcribeResult,
-            { filePath: state.filePath, bytes: state.bytes },
-            options.output
-          );
-
-          await store.update(url, {
-            status: "completed",
-            jsonPath,
-            hasTranscript: Boolean(transcribeResult?.transcript),
-            lastError: null,
-          });
-          console.log(`${label} complete (${state.bytes} bytes, transcribed): ${jsonPath}`);
-        } catch (err) {
-          console.warn(`${label} transcribe failed: ${err.message}`);
           try {
+            await store.update(url, { status: "transcribing" });
+            console.log(`${label} extracting audio...`);
+            wavPath = await extractAudio(state.filePath, options.ffmpegPath);
+            console.log(`${label} transcribing (${options.model}, ${options.device})...`);
+
+            const transcribeResult = await transcribeSemaphore.use(() =>
+              transcribeAudio(wavPath, options)
+            );
+
             const { jsonPath } = writeOutputs(
               state.parsed,
-              null,
+              transcribeResult,
               { filePath: state.filePath, bytes: state.bytes },
               options.output
             );
+
             await store.update(url, {
               status: "completed",
               jsonPath,
-              hasTranscript: false,
+              hasTranscript: Boolean(transcribeResult?.transcript),
               lastError: null,
             });
-            console.log(`${label} completed without transcript: ${jsonPath}`);
-          } catch (writeErr) {
-            await store.update(url, { status: "failed", lastError: writeErr.message });
+            console.log(`${label} complete (${state.bytes} bytes, transcribed): ${jsonPath}`);
+          } catch (err) {
+            console.warn(`${label} transcribe failed: ${err.message}`);
+            try {
+              const { jsonPath } = writeOutputs(
+                state.parsed,
+                null,
+                { filePath: state.filePath, bytes: state.bytes },
+                options.output
+              );
+              await store.update(url, {
+                status: "completed",
+                jsonPath,
+                hasTranscript: false,
+                lastError: null,
+              });
+              console.log(`${label} completed without transcript: ${jsonPath}`);
+            } catch (writeErr) {
+              await store.update(url, { status: "failed", lastError: writeErr.message });
+            }
+          } finally {
+            if (wavPath) await fsp.rm(wavPath, { force: true }).catch(() => {});
           }
         }
-      }
 
-      stopTranscribeServer();
+        stopTranscribeServer();
+      }
     }
   }
 
@@ -732,7 +855,6 @@ async function main() {
   const hasFailures = summary.failed > 0 || summary.permanentFailures > 0;
   const exitCode = summary.completed === summary.total && !hasFailures ? 0 : 1;
   process.exitCode = exitCode;
-  setTimeout(() => process.exit(exitCode), 100);
 }
 
 main().catch((error) => {

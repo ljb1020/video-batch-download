@@ -24,4 +24,4 @@ Deleted, private, friends-only, login-only, and region-restricted works may neve
 
 ## Large batches
 
-Keep browser parsing at 2–3 concurrent pages. Downloads can normally run at 4–8 concurrent streams. For hundreds of links, split input files into manageable runs while reusing the same output directory and state file.
+Keep browser parsing at 2–3 concurrent pages. Downloads default to serial (1 concurrent) for stability. For hundreds of links, split input files into manageable runs while reusing the same output directory and state file.

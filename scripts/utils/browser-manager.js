@@ -1,11 +1,7 @@
 import { chromium } from "playwright";
 import { spawnSync } from "node:child_process";
 import process from "node:process";
-import { settleWithin } from "./common.js";
-
-const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+import { settleWithin, USER_AGENT } from "./common.js";
 
 function forceKillTree(pid) {
   if (!pid) return;

@@ -18,15 +18,7 @@ export class DouyinParser extends PlatformParser {
 
   async parse(browserManager, url, options) {
     const browser = await browserManager.start();
-    const contextOptions = {
-      locale: "zh-CN",
-      userAgent: browserManager.getUserAgent(),
-      viewport: { width: 1280, height: 720 },
-      extraHTTPHeaders: { "Accept-Language": "zh-CN,zh;q=0.9" },
-    };
-    if (options.storageState) {
-      contextOptions.storageState = options.storageState;
-    }
+    const contextOptions = DouyinParser.getBrowserContextOptions(browserManager, options);
 
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
@@ -67,7 +59,7 @@ export class DouyinParser extends PlatformParser {
               permanentReason = `Douyin detail status: ${statusCode}`;
             }
             detailMeta = this._extractDetailMeta(json);
-          } catch {}
+          } catch (e) { console.warn(`[douyin] failed to parse detail API response: ${e.message}`); }
         }
       }
     });
@@ -124,16 +116,17 @@ export class DouyinParser extends PlatformParser {
         postTime: detailMeta?.post_time ?? null,
         duration: detailMeta?.duration ?? null,
         statistics: detailMeta?.statistics ?? {},
+        referer: "https://www.douyin.com/",
         mediaStreams: [
           {
             url: candidates[0].url,
             type: "video+audio",
             format: "mp4",
+            referer: "https://www.douyin.com/",
           },
         ],
       };
     } finally {
-      await page.goto("about:blank", { waitUntil: "commit", timeout: 3_000 }).catch(() => {});
       await settleWithin(context.close(), 5_000);
     }
   }

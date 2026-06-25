@@ -113,7 +113,7 @@ node scripts/download.mjs --input links.txt --output ./downloads --headed
 | `--input <file>` | — | Read URLs from a UTF-8 text file |
 | `--output <dir>` | `./video_results` | Output directory |
 | `--parse-concurrency <n>` | `3` | Concurrent browser parsers |
-| `--download-concurrency <n>` | `6` | Concurrent media downloads |
+| `--download-concurrency <n>` | `1` | Concurrent media downloads (serial by default for stability) |
 | `--max-attempts <n>` | `10` | Retry attempts per item (0 = infinite) |
 | `--page-timeout <secs>` | `45` | Page navigation timeout |
 | `--media-wait <secs>` | `25` | Wait for media response after navigation |

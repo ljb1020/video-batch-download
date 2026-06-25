@@ -17,15 +17,7 @@ export class BilibiliParser extends PlatformParser {
 
   async parse(browserManager, url, options) {
     const browser = await browserManager.start();
-    const contextOptions = {
-      locale: "zh-CN",
-      userAgent: browserManager.getUserAgent(),
-      viewport: { width: 1280, height: 720 },
-      extraHTTPHeaders: { "Accept-Language": "zh-CN,zh;q=0.9" },
-    };
-    if (options.storageState) {
-      contextOptions.storageState = options.storageState;
-    }
+    const contextOptions = BilibiliParser.getBrowserContextOptions(browserManager, options);
 
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
@@ -46,7 +38,7 @@ export class BilibiliParser extends PlatformParser {
           } else if (json.code !== 0) {
             permanentReason = `Bilibili API error: code ${json.code}`;
           }
-        } catch {}
+        } catch (e) { console.warn(`[bilibili] failed to parse view API response: ${e.message}`); }
       }
 
       // Intercept playurl API (video streams)
@@ -56,7 +48,7 @@ export class BilibiliParser extends PlatformParser {
           if (json.code === 0 && json.data) {
             playurlApiData = json.data;
           }
-        } catch {}
+        } catch (e) { console.warn(`[bilibili] failed to parse playurl API response: ${e.message}`); }
       }
     });
 
@@ -89,11 +81,13 @@ export class BilibiliParser extends PlatformParser {
       }
 
       if (!playurlApiData) {
-        throw new Error("No Bilibili playurl API response");
+        const err = new Error("No Bilibili playurl API response");
+        err.permanent = Boolean(permanentReason);
+        throw err;
       }
 
       // Extract video ID (bvid or aid)
-      const videoId = viewApiData.bvid ?? `av${viewApiData.aid}`;
+      const videoId = viewApiData.bvid ?? (viewApiData.aid != null ? `av${viewApiData.aid}` : null) ?? itemKey(url);
 
       // Parse metadata
       const author = {
@@ -136,10 +130,10 @@ export class BilibiliParser extends PlatformParser {
         postTime,
         duration: viewApiData.duration ?? null,
         statistics,
-        mediaStreams,
+        referer: "https://www.bilibili.com/",
+        mediaStreams: mediaStreams.map((s) => ({ ...s, referer: "https://www.bilibili.com/" })),
       };
     } finally {
-      await page.goto("about:blank", { waitUntil: "commit", timeout: 3_000 }).catch(() => {});
       await settleWithin(context.close(), 5_000);
     }
   }

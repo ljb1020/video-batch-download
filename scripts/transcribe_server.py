@@ -44,7 +44,7 @@ def load_whisper(model_name: str, device: str, compute_type: str):
         from faster_whisper import WhisperModel
     except ImportError:
         print(
-            "缺少 faster-whisper，请运行：pip install -U faster-whisper",
+            "Missing faster-whisper. Run: pip install -U faster-whisper",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -121,7 +121,7 @@ def main():
 
         if not Path(wav_path).is_file():
             print(
-                json.dumps({"error": f"音频文件不存在：{wav_path}"}),
+                json.dumps({"error": f"Audio file not found: {wav_path}"}),
                 flush=True,
             )
             continue
@@ -135,8 +135,16 @@ def main():
 
         if not no_simplify:
             if converter is None:
-                import opencc
-                converter = opencc.OpenCC("t2s.json")
+                try:
+                    import opencc
+                    converter = opencc.OpenCC("t2s.json")
+                except ImportError:
+                    print(
+                        "Missing opencc-python-reimplemented. Run: pip install opencc-python-reimplemented",
+                        file=sys.stderr,
+                    )
+                    print(json.dumps({"error": "opencc not installed, cannot simplify text"}), flush=True)
+                    continue
             segments = simplify_segments(segments, converter)
 
         transcript = "\n".join(s["text"] for s in segments)

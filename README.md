@@ -1,13 +1,13 @@
-# Douyin & Bilibili Batch Download & Transcribe
+# Douyin, Bilibili & Xiaohongshu Batch Download & Transcribe
 
 > [🇺🇸 English](README.md) | [🇨🇳 中文](README_zh.md)
 
-Download public videos from Douyin and Bilibili, extract transcripts — fully locally, no cloud APIs.
+Download public videos from Douyin, Bilibili and Xiaohongshu, extract transcripts — fully locally, no cloud APIs.
 
 ## Features
 
 - Browser-based video URL interception via Playwright (no yt-dlp, no third-party APIs)
-- Supports **Douyin (抖音)** and **Bilibili (B站)** platforms
+- Supports **Douyin (抖音)**, **Bilibili (B站)** and **Xiaohongshu (小红书)** platforms
 - Bilibili DASH format support — automatically downloads and merges separate video/audio streams
 - Local speech-to-text via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — no API key, no network, fully free
 - Automatic Traditional → Simplified Chinese conversion via [OpenCC](https://github.com/BYVoid/OpenCC)
@@ -61,9 +61,10 @@ git clone https://github.com/user/video-batch-download.git %USERPROFILE%\.claude
 ### CLI
 
 ```bash
-# Single URL (Douyin or Bilibili)
+# Single URL (Douyin, Bilibili, or Xiaohongshu)
 node scripts/download.mjs "https://v.douyin.com/xxxxx"
 node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
+node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
 
 # Multiple URLs (mixed platforms supported)
 node scripts/download.mjs "url1" "url2" "url3"
@@ -83,10 +84,11 @@ node scripts/download.mjs "url" --device cuda --compute-type float16 --model lar
 
 ### In Claude Code
 
-Paste Douyin or Bilibili links and ask for transcript extraction:
+Paste Douyin, Bilibili or Xiaohongshu links and ask for transcript extraction:
 
 > "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
 > "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
+> "下载这个小红书视频 http://xhslink.com/xxxxx"
 
 ## How it works
 
@@ -204,7 +206,9 @@ video_results/
 ## What this tool does
 
 - Downloads public Douyin videos via browser-based CDN URL interception
-- Extracts metadata (title, author, post time, stats) from the Douyin detail API
+- Downloads public Bilibili videos (including DASH format with separate video/audio streams)
+- Downloads public Xiaohongshu video notes
+- Extracts metadata (title, author, post time, stats) from platform APIs
 - Transcribes audio to text using local faster-whisper
 - Converts Traditional Chinese output to Simplified Chinese
 - Saves structured JSON and plain text transcript locally
@@ -220,9 +224,9 @@ video_results/
 
 - First Whisper model use downloads ~500 MB — this is normal, not a hang
 - CPU transcription: ~12 seconds per minute of audio (GPU: ~0.4 seconds)
-- Platforms: Douyin and Bilibili only
 - Some videos may require verification challenges — use `--headed` mode
 - Bilibili high-quality videos require ffmpeg for DASH stream merging
+- Xiaohongshu image/text notes are not supported (video notes only)
 
 ## License
 

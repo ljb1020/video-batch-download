@@ -1,13 +1,13 @@
-# 抖音 & B站 批量下载与转写
+# 抖音、B站 & 小红书 批量下载与转写
 
-> [🇺🇸 English](README.md) | 🇨🇳 中文
+> 🇺🇸 [English](README.md) | 🇨🇳 中文
 
-批量下载抖音和B站公开视频并提取文案 —— 完全本地化，无需云 API。
+批量下载抖音、B站和小红书公开视频并提取文案 —— 完全本地化，无需云 API。
 
 ## 功能特性
 
 - 通过 Playwright 浏览器拦截获取视频 CDN URL（不依赖 yt-dlp 或第三方解析 API）
-- 支持 **抖音** 和 **B站（Bilibili）** 两大平台
+- 支持 **抖音**、**B站（Bilibili）** 和 **小红书** 三大平台
 - B站 DASH 格式支持 —— 自动下载并合并分离的视频/音频流
 - 通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 实现本地语音转文字 —— 无需 API Key，无需联网，完全免费
 - 通过 [OpenCC](https://github.com/BYVoid/OpenCC) 自动繁→简中文转换
@@ -61,9 +61,10 @@ git clone https://github.com/user/video-batch-download.git %USERPROFILE%\.claude
 ### 命令行（CLI）
 
 ```bash
-# 单个链接（抖音或B站）
+# 单个链接（抖音、B站或小红书）
 node scripts/download.mjs "https://v.douyin.com/xxxxx"
 node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
+node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
 
 # 多个链接（支持混合平台）
 node scripts/download.mjs "url1" "url2" "url3"
@@ -83,10 +84,11 @@ node scripts/download.mjs "url" --device cuda --compute-type float16 --model lar
 
 ### 在 Claude Code 中使用
 
-直接粘贴抖音或B站链接并要求提取文案：
+直接粘贴抖音、B站或小红书链接并要求提取文案：
 
 > "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
 > "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
+> "下载这个小红书视频 http://xhslink.com/xxxxx"
 
 ## 工作原理
 
@@ -203,9 +205,10 @@ video_results/
 
 ## 本工具的特性
 
-- 支持抖音和B站两大平台的视频下载
+- 支持抖音、B站和小红书三大平台的视频下载
 - 抖音：拦截 detail API 获取元数据，拦截 CDN 获取视频 URL
 - B站：拦截 view/playurl API 获取元数据和流媒体 URL，自动处理 DASH 格式
+- 小红书：拦截 feed/note API 获取元数据，拦截 xhscdn.com CDN 获取视频 URL
 - 使用 faster-whisper（本地离线）将音频转为文字
 - 将繁体中文输出转换为简体中文
 - 本地保存结构化 JSON 和纯文本转写
@@ -221,9 +224,9 @@ video_results/
 
 - 首次使用 Whisper 模型会下载约 500 MB —— 这是正常现象，不是卡住
 - CPU 转写：1 分钟音频约 12 秒（GPU：约 0.4 秒）
-- 平台范围：抖音和B站
 - 部分视频可能触发验证码 —— 使用 `--headed` 模式
 - B站高画质视频需要 ffmpeg 合并 DASH 流
+- 小红书仅支持视频笔记，不支持图文笔记
 
 ## 开源协议
 

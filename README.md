@@ -44,16 +44,16 @@ pip install -U faster-whisper opencc
 
 **Option A: Tell your AI assistant (easiest)**
 
-> "Install this skill: https://github.com/user/video-batch-download"
+> "Install this skill: https://github.com/ljb1020/video-batch-download"
 
 **Option B: git clone**
 
 ```bash
 # Linux/macOS
-git clone https://github.com/user/video-batch-download.git ~/.claude/skills/video-batch-download
+git clone https://github.com/ljb1020/video-batch-download.git ~/.claude/skills/video-batch-download
 
 # Windows
-git clone https://github.com/user/video-batch-download.git %USERPROFILE%\.claude\skills\video-batch-download
+git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.claude\skills\video-batch-download
 ```
 
 ## Usage

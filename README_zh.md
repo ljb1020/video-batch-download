@@ -105,7 +105,7 @@ Playwright 浏览器解析 → 提取视频元数据 + 拦截 CDN URL
     ↓
 ffmpeg 提取音频 → 16kHz mono WAV
     ↓
-faster-whisper 语音转文字（串行，GPU 安全，模型复用）
+faster-whisper 语音转文字（模型复用，CUDA 默认保守配置）
     ↓
 OpenCC 繁→简中文转换
     ↓
@@ -227,6 +227,12 @@ video_results/
 - 部分视频可能触发验证码 —— 使用 `--headed` 模式
 - B站高画质视频需要 ffmpeg 合并 DASH 流
 - 小红书仅支持视频笔记，不支持图文笔记
+
+## 参考文档
+
+- [架构与设计说明](references/architecture.md)
+- [新平台开发与维护规范](references/platform-development.md)
+- [故障排查](references/troubleshooting.md)
 
 ## 开源协议
 

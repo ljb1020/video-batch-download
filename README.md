@@ -105,7 +105,7 @@ Playwright browser → parse video metadata + intercept CDN URL
     ↓
 ffmpeg extract audio → 16kHz mono WAV
     ↓
-faster-whisper speech-to-text (serial, GPU-safe, model reused)
+faster-whisper speech-to-text (model reused, conservative CUDA default)
     ↓
 OpenCC Traditional → Simplified Chinese
     ↓
@@ -227,6 +227,12 @@ video_results/
 - Some videos may require verification challenges — use `--headed` mode
 - Bilibili high-quality videos require ffmpeg for DASH stream merging
 - Xiaohongshu image/text notes are not supported (video notes only)
+
+## Reference docs
+
+- [Architecture and design](references/architecture.md)
+- [Platform development guide](references/platform-development.md)
+- [Troubleshooting](references/troubleshooting.md)
 
 ## License
 

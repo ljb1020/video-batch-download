@@ -1,4 +1,4 @@
-# Video Batch Download & Transcribe — 技术栈与设计思路（多平台架构）
+# Video Batch Download & Transcribe — 架构与设计说明
 
 ## 一、需求概述
 
@@ -183,7 +183,7 @@ mediaStreams: [{
 │            faster-whisper (本地 ASR)         │
 │                                            │
 │   将音频转写为文字（带时间戳）               │
-│   串行处理，保证 GPU 安全                    │
+│   模型加载一次复用，CUDA 默认保守配置        │
 │   模型加载一次，整个批次复用                 │
 │                                            │
 │   完全本地运行，不依赖任何云端服务            │
@@ -476,7 +476,7 @@ Python 脚本只做转写（faster-whisper + OpenCC），纯函数，输入 WAV 
 | faster-whisper 本地转写 | ✅ 已实现 |
 | Whisper 模型复用（批次内） | ✅ 已实现 |
 | OpenCC 繁→简转换 | ✅ 已实现 |
-| 转写串行保证 GPU 安全 | ✅ 已实现 |
+| Whisper 模型复用与 CUDA 保守默认配置 | ✅ 已实现 |
 | 结构化 JSON 输出 | ✅ 已实现 |
 | 实时进度输出 | ✅ 已实现 |
 | 验证码检测 + 有头模式回退 | ✅ 已实现 |

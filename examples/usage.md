@@ -9,7 +9,7 @@ node scripts/download.mjs "https://v.douyin.com/iRNBho5/"
 ## Terminal output (stderr)
 
 ```
-[batch] 1 unique URL(s), parse concurrency 3, download concurrency 6, transcribe on (small, cpu), output ./douyin_results
+[batch] 1 unique URL(s), parse concurrency 3, download concurrency 1, transcribe on (concurrency 3, small, cpu), output ./douyin_results
 [1/1] parse attempt 1/10: https://v.douyin.com/iRNBho5/
 [1/1] extracting audio...
 [1/1] transcribing (small, cpu)...

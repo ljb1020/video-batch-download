@@ -42,7 +42,7 @@ Also requires `ffmpeg` on PATH.
 2. **Ask for output directory** — If user doesn't specify, default to `./video_results/`.
 3. **Run the script** — Parallel pipeline:
     - Parse video metadata via Playwright browser interception (parallel, concurrency 3)
-    - Download MP4 via CDN URL (parallel, concurrency 6). For Bilibili DASH format, downloads video and audio streams separately and merges with ffmpeg.
+    - Download MP4 via CDN URL (concurrency 1 by default for stability). For Bilibili DASH format, downloads video and audio streams separately and merges with ffmpeg.
     - Extract audio with ffmpeg → transcribe with local faster-whisper (serial, GPU-safe)
     - Convert Traditional Chinese to Simplified via OpenCC
     - Write structured JSON + plain text transcript

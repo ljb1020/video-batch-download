@@ -12,14 +12,14 @@ Download public videos from Douyin, Bilibili and Xiaohongshu, extract transcript
 - Local speech-to-text via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — no API key, no network, fully free
 - Automatic Traditional → Simplified Chinese conversion via [OpenCC](https://github.com/BYVoid/OpenCC)
 - Structured JSON metadata (title, author, post time, stats)
-- Parallel download pipeline — downloads run concurrently, transcription is serial (GPU-safe)
+- Parallel pipeline with conservative defaults — parsing and transcription can run concurrently, media downloads are serial by default for stability
 - Failed items auto-retry with exponential backoff
 - Resumable: rerun the same command to skip completed items
 - Real-time progress output
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 20+
 - Python 3.10+
 - [ffmpeg](https://ffmpeg.org/) (must be on PATH)
 
@@ -98,7 +98,7 @@ Input URL(s)
 Playwright browser → parse video metadata + intercept CDN URL
     ↓
 ┌─ Worker 1: download MP4 ──┐
-├─ Worker 2: download MP4 ──┤  (parallel, concurrency 6)
+├─ Worker 2: download MP4 ──┤  (serial by default, configurable)
 └─ Worker 3: download MP4 ──┘
     ↓
 (Bilibili DASH: merge video+audio streams with ffmpeg)
@@ -181,7 +181,7 @@ video_results/
 | `--input <file>` | — | Read URLs from a UTF-8 text file |
 | `--output <dir>` | `./video_results` | Output directory |
 | `--parse-concurrency <n>` | `3` | Concurrent browser parsers |
-| `--download-concurrency <n>` | `6` | Concurrent media downloads |
+| `--download-concurrency <n>` | `1` | Concurrent media downloads (serial by default for stability) |
 | `--max-attempts <n>` | `10` | Retry attempts per item (0 = infinite) |
 | `--page-timeout <secs>` | `45` | Page navigation timeout |
 | `--media-wait <secs>` | `25` | Wait for media response after navigation |

@@ -8,7 +8,7 @@
 
 ## Headless parsing repeatedly finds no media
 
-Rerun with `--headed`. Leave the browser open if Douyin presents a verification prompt. Reduce `--parse-concurrency` to 1 or 2. Do not increase concurrency to fight throttling.
+Rerun with `--headed`. Leave the browser open if Douyin presents a verification prompt. Keep `--parse-concurrency` at the default 1, or reduce it back to 1 if you changed it. Do not increase concurrency to fight throttling.
 
 ## A batch was interrupted
 
@@ -24,4 +24,4 @@ Deleted, private, friends-only, login-only, and region-restricted works may neve
 
 ## Large batches
 
-Keep browser parsing at 2–3 concurrent pages. Downloads default to serial (1 concurrent) for stability. For hundreds of links, split input files into manageable runs while reusing the same output directory and state file.
+Keep browser parsing at the default 1 concurrent page unless you have verified the target platform remains stable. Downloads and transcription are serial by default for stability. For hundreds of links, split input files into manageable runs while reusing the same output directory and state file.

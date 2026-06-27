@@ -12,7 +12,7 @@ Download public videos from Douyin, Bilibili and Xiaohongshu, extract transcript
 - Local speech-to-text via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — no API key, no network, fully free
 - Automatic Traditional → Simplified Chinese conversion via [OpenCC](https://github.com/BYVoid/OpenCC)
 - Structured JSON metadata (title, author, post time, stats)
-- Parallel pipeline with conservative defaults — parsing and transcription can run concurrently, media downloads are serial by default for stability
+- Parallel parsing with conservative defaults — media downloads and transcription run serially by default for stability
 - Failed items auto-retry with exponential backoff
 - Resumable: rerun the same command to skip completed items
 - Real-time progress output
@@ -180,7 +180,7 @@ video_results/
 |---|---|---|
 | `--input <file>` | — | Read URLs from a UTF-8 text file |
 | `--output <dir>` | `./video_results` | Output directory |
-| `--parse-concurrency <n>` | `3` | Concurrent browser parsers |
+| `--parse-concurrency <n>` | `1` | Concurrent browser parsers |
 | `--download-concurrency <n>` | `1` | Concurrent media downloads (serial by default for stability) |
 | `--max-attempts <n>` | `10` | Retry attempts per item (0 = infinite) |
 | `--page-timeout <secs>` | `45` | Page navigation timeout |
@@ -201,7 +201,6 @@ video_results/
 | `--no-simplify` | off | Skip Traditional→Simplified conversion |
 | `--ffmpeg-path <path>` | auto | Path to ffmpeg executable |
 | `--transcribe-timeout <secs>` | `600` | Timeout per transcription |
-| `--transcribe-concurrency <n>` | `3` (cpu) / `1` (cuda) | Parallel transcriptions |
 
 ## What this tool does
 

@@ -12,7 +12,7 @@
 - 通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 实现本地语音转文字 —— 无需 API Key，无需联网，完全免费
 - 通过 [OpenCC](https://github.com/BYVoid/OpenCC) 自动繁→简中文转换
 - 结构化 JSON 元数据（标题、作者、发布时间、播放/点赞/评论/分享/收藏数）
-- 并行处理流水线 —— 解析与转写可并发，媒体下载默认串行以提高稳定性
+- 保守并行处理 —— 解析可并发，媒体下载与转写默认串行以提高稳定性
 - 失败自动重试（指数退避）
 - 断点续传：重跑同一命令自动跳过已完成项
 - 实时进度输出
@@ -180,7 +180,7 @@ video_results/
 |---|---|---|
 | `--input <file>` | — | 从 UTF-8 文本文件读取链接 |
 | `--output <dir>` | `./video_results` | 输出目录 |
-| `--parse-concurrency <n>` | `3` | 并发浏览器解析数 |
+| `--parse-concurrency <n>` | `1` | 并发浏览器解析数 |
 | `--download-concurrency <n>` | `1` | 并发下载数（默认串行以提高稳定性） |
 | `--max-attempts <n>` | `10` | 每条链接重试次数（0 = 无限重试） |
 | `--page-timeout <secs>` | `45` | 页面导航超时 |
@@ -201,7 +201,6 @@ video_results/
 | `--no-simplify` | 关闭 | 跳过繁→简转换 |
 | `--ffmpeg-path <path>` | 自动 | ffmpeg 可执行文件路径 |
 | `--transcribe-timeout <secs>` | `600` | 单次转写超时 |
-| `--transcribe-concurrency <n>` | `3`（cpu）/ `1`（cuda） | 并发转写数 |
 
 ## 本工具的特性
 

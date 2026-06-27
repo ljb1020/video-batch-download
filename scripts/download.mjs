@@ -22,7 +22,7 @@ Usage:
 Download options:
   --input <file>                 Read share text/URLs from a UTF-8 file
   --output <dir>                 Output directory (default: ./video_results)
-  --parse-concurrency <n>        Concurrent browser parsers (default: 3)
+  --parse-concurrency <n>        Concurrent browser parsers (default: 1)
   --download-concurrency <n>     Concurrent media downloads (default: 1)
   --max-attempts <n>             Attempts per item; 0 retries forever (default: 10)
   --page-timeout <seconds>       Page navigation timeout (default: 45)
@@ -40,7 +40,6 @@ Transcription options:
   --no-simplify                  Skip Traditional→Simplified Chinese conversion
   --ffmpeg-path <path>           Path to ffmpeg executable
   --transcribe-timeout <secs>    Timeout per transcription in seconds (default: 600)
-  --transcribe-concurrency <n>   Parallel transcriptions (default: 3 for cpu, 1 for cuda)
 
 Rerun with the same output directory to resume from download-state.json.
 `);
@@ -58,7 +57,7 @@ function parseArgs(argv) {
   const options = {
     input: null,
     output: path.resolve("video_results"),
-    parseConcurrency: 3,
+    parseConcurrency: 1,
     downloadConcurrency: 1,
     maxAttempts: 10,
     pageTimeoutMs: 45_000,
@@ -75,7 +74,6 @@ function parseArgs(argv) {
     simplify: true,
     ffmpegPath: null,
     transcribeTimeoutMs: 600_000,
-    transcribeConcurrency: null, // null = auto (cpu:3, cuda:1)
     texts: [],
   };
 
@@ -104,7 +102,6 @@ function parseArgs(argv) {
     else if (arg === "--no-simplify") options.simplify = false;
     else if (arg === "--ffmpeg-path") options.ffmpegPath = path.resolve(next());
     else if (arg === "--transcribe-timeout") options.transcribeTimeoutMs = parsePositiveInt(next(), arg) * 1_000;
-    else if (arg === "--transcribe-concurrency") options.transcribeConcurrency = parsePositiveInt(next(), arg);
     else if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg.startsWith("--")) throw new Error(`Unknown option: ${arg}`);
     else options.texts.push(arg);
@@ -643,8 +640,6 @@ async function main() {
   await store.load();
   const parseSemaphore = new Semaphore(options.parseConcurrency);
   const downloadSemaphore = new Semaphore(options.downloadConcurrency);
-  const transcribeConcurrency = options.transcribeConcurrency ?? (options.device === "cuda" ? 1 : 3);
-  const transcribeSemaphore = new Semaphore(transcribeConcurrency);
   const browserManager = new BrowserManager(options.headed);
   const results = [];
   let stopping = false;
@@ -666,7 +661,7 @@ async function main() {
     `[batch] ${urlsWithParsers.length} unique URL(s), ` +
       `parse concurrency ${options.parseConcurrency}, ` +
       `download concurrency ${options.downloadConcurrency}, ` +
-      `transcribe ${options.transcribe ? `on (concurrency ${transcribeConcurrency}, ${options.model}, ${options.device})` : "off"}, ` +
+      `transcribe ${options.transcribe ? `on (serial, ${options.model}, ${options.device})` : "off"}, ` +
       `output ${options.output}`,
   );
 
@@ -831,9 +826,7 @@ async function main() {
             wavPath = await extractAudio(state.filePath, options.ffmpegPath);
             console.log(`${label} transcribing (${options.model}, ${options.device})...`);
 
-            const transcribeResult = await transcribeSemaphore.use(() =>
-              transcribeAudio(wavPath, options)
-            );
+            const transcribeResult = await transcribeAudio(wavPath, options);
 
             const { jsonPath } = await writeOutputsWithMediaInfo(
               state.parsed,

@@ -234,6 +234,10 @@ video_results/
 - [Platform development guide](references/platform-development.md)
 - [Troubleshooting](references/troubleshooting.md)
 
+## Acknowledgements
+
+Thanks to the [LINUX DO](https://linux.do/) community for its open-source spirit and feedback from fellow members.
+
 ## License
 
 [MIT](LICENSE)

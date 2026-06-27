@@ -234,6 +234,10 @@ video_results/
 - [新平台开发与维护规范](references/platform-development.md)
 - [故障排查](references/troubleshooting.md)
 
+## 致谢
+
+感谢 [LINUX DO](https://linux.do/) 社区的开源氛围与佬友反馈。
+
 ## 开源协议
 
 [MIT](LICENSE)

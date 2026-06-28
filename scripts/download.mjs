@@ -269,13 +269,19 @@ async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
 
   // Single stream (e.g., Douyin or Bilibili durl fallback)
   if (streams.length === 1 && streams[0].type === "video+audio") {
-    return await downloadSingleStream(
+    const downloaded = await downloadSingleStream(
       streams[0],
       parsed.videoId,
       "",
       outputDir,
       timeoutMs
     );
+    const audioOk = await hasAudioTrack(downloaded.filePath, ffmpegPath);
+    if (!audioOk) {
+      await fsp.rm(downloaded.filePath, { force: true }).catch(() => {});
+      throw new Error("Downloaded video has no audio track");
+    }
+    return downloaded;
   }
 
   // Multi-stream (e.g., Bilibili DASH)
@@ -857,7 +863,7 @@ async function main() {
                 status: "completed",
                 jsonPath,
                 hasTranscript: false,
-                lastError: null,
+                lastError: err.message,
               });
               console.log(`${label} completed without transcript: ${jsonPath}`);
             } catch (writeErr) {

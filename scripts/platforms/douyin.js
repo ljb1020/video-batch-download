@@ -102,6 +102,10 @@ export class DouyinParser extends PlatformParser {
 
       // Sort candidates by quality
       candidates.sort((a, b) => this._candidateScore(b) - this._candidateScore(a));
+      const mediaStreams = this._selectMediaStreams(candidates);
+      if (mediaStreams.length === 0) {
+        throw new Error("No valid Douyin media streams found");
+      }
 
       const videoId = this._extractVideoId(finalUrl) ?? itemKey(url);
 
@@ -117,14 +121,10 @@ export class DouyinParser extends PlatformParser {
         duration: detailMeta?.duration ?? null,
         statistics: detailMeta?.statistics ?? {},
         referer: "https://www.douyin.com/",
-        mediaStreams: [
-          {
-            url: candidates[0].url,
-            type: "video+audio",
-            format: "mp4",
-            referer: "https://www.douyin.com/",
-          },
-        ],
+        mediaStreams: mediaStreams.map((stream) => ({
+          ...stream,
+          referer: "https://www.douyin.com/",
+        })),
       };
     } finally {
       await settleWithin(context.close(), 5_000);
@@ -141,6 +141,79 @@ export class DouyinParser extends PlatformParser {
       bitrate = Number(new URL(candidate.url).searchParams.get("br") ?? 0);
     } catch {}
     return (candidate.totalBytes ?? 0) * 10 + bitrate;
+  }
+
+  _selectMediaStreams(candidates) {
+    const mergedCandidates = candidates.filter((candidate) =>
+      !this._isDashVideoUrl(candidate.url) && !this._isDashAudioUrl(candidate.url)
+    );
+    const dashVideos = candidates.filter((candidate) => this._isDashVideoUrl(candidate.url));
+    const dashAudios = candidates.filter((candidate) => this._isDashAudioUrl(candidate.url));
+    const best = candidates[0];
+
+    if (best && this._isDashVideoUrl(best.url)) {
+      if (dashAudios[0]) return this._dashStreams(best, dashAudios[0]);
+      if (mergedCandidates[0]) return [this._mergedStream(mergedCandidates[0])];
+      const audio = this._deriveDashAudioCandidate(best);
+      if (audio) return this._dashStreams(best, audio);
+      const err = new Error("Douyin DASH audio stream not found");
+      err.permanent = true;
+      throw err;
+    }
+
+    if (mergedCandidates[0]) return [this._mergedStream(mergedCandidates[0])];
+
+    if (dashVideos[0]) {
+      const audio = dashAudios[0] ?? this._deriveDashAudioCandidate(dashVideos[0]);
+      if (audio) return this._dashStreams(dashVideos[0], audio);
+      const err = new Error("Douyin DASH audio stream not found");
+      err.permanent = true;
+      throw err;
+    }
+
+    return [];
+  }
+
+  _mergedStream(candidate) {
+    return {
+      url: candidate.url,
+      type: "video+audio",
+      format: "mp4",
+    };
+  }
+
+  _dashStreams(video, audio) {
+    return [
+      {
+        url: video.url,
+        type: "video",
+        format: "mp4",
+      },
+      {
+        url: audio.url,
+        type: "audio",
+        format: "mp4",
+      },
+    ];
+  }
+
+  _isDashVideoUrl(url) {
+    return /media-video-avc1/i.test(url);
+  }
+
+  _isDashAudioUrl(url) {
+    return /media-audio-mp4a/i.test(url);
+  }
+
+  _deriveDashAudioCandidate(videoCandidate) {
+    if (!this._isDashVideoUrl(videoCandidate.url)) return null;
+    const audioUrl = videoCandidate.url.replace(/media-video-avc1/ig, "media-audio-mp4a");
+    if (audioUrl === videoCandidate.url) return null;
+    return {
+      url: audioUrl,
+      totalBytes: 0,
+      source: "derived-dash-audio",
+    };
   }
 
   _collectMediaUrls(value, results, depth = 0) {

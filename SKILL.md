@@ -36,12 +36,14 @@ pip install -U faster-whisper opencc
 
 Also requires `ffmpeg` on PATH.
 
+Default transcription uses `medium + cuda + float16 + zh`, which works best on machines with a usable NVIDIA CUDA environment. If CUDA is unavailable or default transcription startup fails, run with `--device cpu --compute-type int8 --model small`.
+
 ## Workflow
 
 1. **Receive URLs** — User provides one or more Douyin, Bilibili or Xiaohongshu links (or share text containing links). The script auto-extracts valid URLs from any text and routes them to the appropriate platform parser.
 2. **Ask for output directory** — If user doesn't specify, default to `./video_results/`.
 3. **Run the script** — Parallel pipeline:
-    - Parse video metadata via Playwright browser interception (parallel, concurrency 3)
+    - Parse video metadata via Playwright browser interception (concurrency 1 by default for stability)
     - Download MP4 via CDN URL (concurrency 1 by default for stability). For Bilibili DASH format, downloads video and audio streams separately and merges with ffmpeg.
     - Extract audio with ffmpeg → transcribe with local faster-whisper (model reused, conservative CUDA default)
     - Convert Traditional Chinese to Simplified via OpenCC
@@ -113,7 +115,7 @@ node scripts/download.mjs --input links.txt --output ./downloads --headed
 |---|---|---|
 | `--input <file>` | — | Read URLs from a UTF-8 text file |
 | `--output <dir>` | `./video_results` | Output directory |
-| `--parse-concurrency <n>` | `3` | Concurrent browser parsers |
+| `--parse-concurrency <n>` | `1` | Concurrent browser parsers |
 | `--download-concurrency <n>` | `1` | Concurrent media downloads (serial by default for stability) |
 | `--max-attempts <n>` | `10` | Retry attempts per item (0 = infinite) |
 | `--page-timeout <secs>` | `45` | Page navigation timeout |
@@ -127,14 +129,13 @@ node scripts/download.mjs --input links.txt --output ./downloads --headed
 | Parameter | Default | Description |
 |---|---|---|
 | `--no-transcribe` | off | Skip Whisper transcription |
-| `--model <name>` | `small` | Whisper model (`small`, `medium`, `large-v3`) |
-| `--language <code>` | `auto` | Language code, `auto` = auto-detect |
-| `--device <cpu\|cuda>` | `cpu` | Transcription device |
-| `--compute-type <type>` | `int8` | Precision (`int8`, `float16`, `float32`) |
+| `--model <name>` | `medium` | Whisper model (`small`, `medium`, `large-v3`) |
+| `--language <code>` | `zh` | Language code, `auto` = auto-detect |
+| `--device <cpu\|cuda>` | `cuda` | Transcription device |
+| `--compute-type <type>` | `float16` | Precision (`int8`, `float16`, `float32`) |
 | `--no-simplify` | off | Skip Traditional→Simplified conversion |
 | `--ffmpeg-path <path>` | auto | Path to ffmpeg executable |
 | `--transcribe-timeout <secs>` | `600` | Timeout per transcription |
-| `--transcribe-concurrency <n>` | `3` (cpu) / `1` (cuda) | Parallel transcriptions |
 
 ## Output format
 
@@ -187,11 +188,11 @@ video_results/
   ],
   "transcript_source": "faster-whisper",
   "transcription": {
-    "model": "small",
+    "model": "medium",
     "language": "zh",
     "language_probability": 0.98,
-    "device": "cpu",
-    "compute_type": "int8"
+    "device": "cuda",
+    "compute_type": "float16"
   },
   "media_info": {
     "width": 1080,

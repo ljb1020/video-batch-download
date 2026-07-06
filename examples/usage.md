@@ -9,10 +9,10 @@ node scripts/download.mjs "https://v.douyin.com/iRNBho5/"
 ## Terminal output (stderr)
 
 ```
-[batch] 1 unique URL(s), parse concurrency 3, download concurrency 1, transcribe on (concurrency 3, small, cpu), output ./douyin_results
+[batch] 1 unique URL(s), parse concurrency 1, download concurrency 1, transcribe on (serial, medium, cuda), output ./douyin_results
 [1/1] parse attempt 1/10: https://v.douyin.com/iRNBho5/
 [1/1] extracting audio...
-[1/1] transcribing (small, cpu)...
+[1/1] transcribing (medium, cuda)...
 [1/1] complete (3829104 bytes, transcribed): douyin_results/2026_06_24_21-30-00_抖音_张三_740123456789/...json
 ```
 
@@ -42,6 +42,15 @@ node scripts/download.mjs "https://v.douyin.com/abc123" \
   --device cuda \
   --compute-type float16 \
   --model large-v3
+```
+
+## Example: CPU fallback for compatibility
+
+```bash
+node scripts/download.mjs "https://v.douyin.com/abc123" \
+  --device cpu \
+  --compute-type int8 \
+  --model small
 ```
 
 ## Example: Skip transcription

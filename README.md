@@ -14,7 +14,7 @@ Download public videos from Douyin, Bilibili and Xiaohongshu, extract transcript
 - Structured JSON metadata (title, author, post time, stats)
 - Parallel parsing with conservative defaults — media downloads and transcription run serially by default for stability
 - Failed items auto-retry with exponential backoff
-- Resumable: rerun the same command to skip completed items
+- Resumable: rerun with the same output directory to reuse `download-state.json`, skip completed downloads, and reuse completed transcript outputs when the JSON/TXT files still exist
 - Real-time progress output
 
 ## Prerequisites
@@ -22,6 +22,9 @@ Download public videos from Douyin, Bilibili and Xiaohongshu, extract transcript
 - Node.js 20+
 - Python 3.10+
 - [ffmpeg](https://ffmpeg.org/) (must be on PATH)
+
+The default transcription profile is `medium + cuda + float16 + zh`, which works best on machines with a usable NVIDIA CUDA environment.
+If CUDA is unavailable or default transcription startup fails, run with: `--device cpu --compute-type int8 --model small`
 
 ## Installation
 
@@ -163,11 +166,11 @@ video_results/
   ],
   "transcript_source": "faster-whisper",
   "transcription": {
-    "model": "small",
+    "model": "medium",
     "language": "zh",
     "language_probability": 0.98,
-    "device": "cpu",
-    "compute_type": "int8"
+    "device": "cuda",
+    "compute_type": "float16"
   }
 }
 ```
@@ -194,10 +197,10 @@ video_results/
 | Parameter | Default | Description |
 |---|---|---|
 | `--no-transcribe` | off | Skip Whisper transcription |
-| `--model <name>` | `small` | Whisper model (`small`, `medium`, `large-v3`) |
-| `--language <code>` | `auto` | Language code, `auto` = auto-detect |
-| `--device <cpu\|cuda>` | `cpu` | Transcription device |
-| `--compute-type <type>` | `int8` | Precision (`int8`, `float16`, `float32`) |
+| `--model <name>` | `medium` | Whisper model (`small`, `medium`, `large-v3`) |
+| `--language <code>` | `zh` | Language code, `auto` = auto-detect |
+| `--device <cpu\|cuda>` | `cuda` | Transcription device |
+| `--compute-type <type>` | `float16` | Precision (`int8`, `float16`, `float32`) |
 | `--no-simplify` | off | Skip Traditional→Simplified conversion |
 | `--ffmpeg-path <path>` | auto | Path to ffmpeg executable |
 | `--transcribe-timeout <secs>` | `600` | Timeout per transcription |

@@ -14,7 +14,7 @@
 - 结构化 JSON 元数据（标题、作者、发布时间、播放/点赞/评论/分享/收藏数）
 - 保守并行处理 —— 解析可并发，媒体下载与转写默认串行以提高稳定性
 - 失败自动重试（指数退避）
-- 断点续传：重跑同一命令自动跳过已完成项
+- 断点续传：使用同一输出目录重跑时会复用 `download-state.json`，跳过已下载项；若 JSON/TXT 转写结果仍在，也会跳过已完成转写
 - 实时进度输出
 
 ## 前置条件
@@ -22,6 +22,9 @@
 - Node.js 20+
 - Python 3.10+
 - [ffmpeg](https://ffmpeg.org/)（需要在 PATH 中）
+
+默认转写配置为 `medium + cuda + float16 + zh`，更适合具备可用 NVIDIA CUDA 环境的电脑。
+如果你的电脑不支持 CUDA，或默认转写启动失败，建议显式改用：`--device cpu --compute-type int8 --model small`
 
 ## 安装
 
@@ -163,11 +166,11 @@ video_results/
   ],
   "transcript_source": "faster-whisper",
   "transcription": {
-    "model": "small",
+    "model": "medium",
     "language": "zh",
     "language_probability": 0.98,
-    "device": "cpu",
-    "compute_type": "int8"
+    "device": "cuda",
+    "compute_type": "float16"
   }
 }
 ```
@@ -194,10 +197,10 @@ video_results/
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `--no-transcribe` | 关闭 | 跳过 Whisper 转写 |
-| `--model <name>` | `small` | Whisper 模型（`small`, `medium`, `large-v3`） |
-| `--language <code>` | `auto` | 语言代码，`auto` = 自动检测 |
-| `--device <cpu\|cuda>` | `cpu` | 转写设备 |
-| `--compute-type <type>` | `int8` | 精度（`int8`, `float16`, `float32`） |
+| `--model <name>` | `medium` | Whisper 模型（`small`, `medium`, `large-v3`） |
+| `--language <code>` | `zh` | 语言代码，`auto` = 自动检测 |
+| `--device <cpu\|cuda>` | `cuda` | 转写设备 |
+| `--compute-type <type>` | `float16` | 精度（`int8`, `float16`, `float32`） |
 | `--no-simplify` | 关闭 | 跳过繁→简转换 |
 | `--ffmpeg-path <path>` | 自动 | ffmpeg 可执行文件路径 |
 | `--transcribe-timeout <secs>` | `600` | 单次转写超时 |

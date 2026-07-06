@@ -33,16 +33,49 @@ Download options:
 
 Transcription options:
   --no-transcribe                Skip Whisper transcription (download only)
-  --model <name>                 Whisper model: small, medium, large-v3 (default: small)
-  --language <code>              Language hint, auto = detect (default: auto)
-  --device <cpu|cuda>            Transcription device (default: cpu)
-  --compute-type <type>          Precision: int8, float16, float32 (default: int8)
+  --model <name>                 Whisper model: small, medium, large-v3 (default: medium)
+  --language <code>              Language hint, auto = detect (default: zh)
+  --device <cpu|cuda>            Transcription device (default: cuda)
+  --compute-type <type>          Precision: int8, float16, float32 (default: float16)
   --no-simplify                  Skip Traditional→Simplified Chinese conversion
   --ffmpeg-path <path>           Path to ffmpeg executable
   --transcribe-timeout <secs>    Timeout per transcription in seconds (default: 600)
 
 Rerun with the same output directory to resume from download-state.json.
 `);
+}
+
+async function fileExists(filePath) {
+  if (!filePath) return false;
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getTranscriptPathFromJsonPath(jsonPath) {
+  if (!jsonPath) return null;
+  if (jsonPath.endsWith(".json")) return `${jsonPath.slice(0, -5)}_transcript.txt`;
+  return `${jsonPath}_transcript.txt`;
+}
+
+async function hasReusableTranscriptOutput(state) {
+  if (!state?.hasTranscript || state?.status !== "completed" || !state?.jsonPath) {
+    return false;
+  }
+  if (!(await fileExists(state.jsonPath))) return false;
+  return await fileExists(getTranscriptPathFromJsonPath(state.jsonPath));
+}
+
+async function getPendingTranscriptions(items) {
+  const pending = [];
+  for (const item of items) {
+    if (await hasReusableTranscriptOutput(item.state)) continue;
+    pending.push(item);
+  }
+  return pending;
 }
 
 function parsePositiveInt(value, option, { allowZero = false } = {}) {
@@ -67,10 +100,10 @@ function parseArgs(argv) {
     storageState: null,
     // Transcription
     transcribe: true,
-    model: "small",
-    language: "auto",
-    device: "cpu",
-    computeType: "int8",
+    model: "medium",
+    language: "zh",
+    device: "cuda",
+    computeType: "float16",
     simplify: true,
     ffmpegPath: null,
     transcribeTimeoutMs: 600_000,
@@ -805,11 +838,17 @@ async function main() {
     const downloaded = urls
       .map((url) => ({ url, state: store.get(url) }))
       .filter((item) => item.state?.filePath && item.state?.parsed);
+    const pending = await getPendingTranscriptions(downloaded);
 
-    if (downloaded.length === 0) {
+    if (pending.length === 0) {
       console.log("[phase 2] nothing to transcribe");
     } else {
-      console.log(`[phase 2] transcribing ${downloaded.length} video(s)...`);
+      const skipped = downloaded.length - pending.length;
+      console.log(
+        `[phase 2] transcribing ${pending.length} video(s)` +
+        (skipped > 0 ? ` (${skipped} already transcribed)` : "") +
+        "..."
+      );
 
       let serverReady = true;
       try {
@@ -820,10 +859,10 @@ async function main() {
       }
 
       if (serverReady) {
-        for (let i = 0; i < downloaded.length; i++) {
+        for (let i = 0; i < pending.length; i++) {
           if (stopping) break;
-          const { url, state } = downloaded[i];
-          const label = `[${i + 1}/${downloaded.length}]`;
+          const { url, state } = pending[i];
+          const label = `[${i + 1}/${pending.length}]`;
           let wavPath = null;
 
           try {

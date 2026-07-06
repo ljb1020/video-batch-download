@@ -2,7 +2,7 @@
 """Persistent transcription server — model loaded once, reused for all requests.
 
 Usage:
-  python transcribe_server.py --model small --device cuda --compute-type float16 [--no-simplify]
+  python transcribe_server.py --model medium --device cuda --compute-type float16 [--no-simplify]
 
 Protocol (stdin/stdout, one JSON per line):
   Request:  {"wav_path": "...", "language": "zh"}
@@ -84,9 +84,9 @@ def simplify_segments(segments, converter):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="small")
-    parser.add_argument("--device", default="cpu")
-    parser.add_argument("--compute-type", default="int8", dest="compute_type")
+    parser.add_argument("--model", default="medium")
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--compute-type", default="float16", dest="compute_type")
     parser.add_argument("--no-simplify", action="store_true")
     args = parser.parse_args()
 

@@ -360,11 +360,11 @@ URL_3:      [解析]──[下载]──[提取音频]──[转写]──[输�
   ],
   "transcript_source": "faster-whisper",
   "transcription": {
-    "model": "small",
+    "model": "medium",
     "language": "zh",
     "language_probability": 0.98,
-    "device": "cpu",
-    "compute_type": "int8"
+    "device": "cuda",
+    "compute_type": "float16"
   },
   "media_info": {
     "width": 1080,
@@ -425,7 +425,7 @@ Node.js 主进程通过 `spawn` 调用 Python 转写脚本：
 
 ```
 Node:  spawn("python", ["transcribe_server.py"])
-       ───stdin──→  {"wav_path": "...", "model": "small", ...}
+       ───stdin──→  {"wav_path": "...", "model": "medium", ...}
        ←──stdout─── {"segments": [...], "transcript": "...", "meta": {...}}
 ```
 

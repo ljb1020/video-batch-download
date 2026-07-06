@@ -62,11 +62,11 @@
   ],
   "transcript_source": "faster-whisper",
   "transcription": {
-    "model": "small",
+    "model": "medium",
     "language": "zh",
     "language_probability": 0.98,
-    "device": "cpu",
-    "compute_type": "int8"
+    "device": "cuda",
+    "compute_type": "float16"
   },
   "media_info": {
     "width": 1080,

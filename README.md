@@ -8,14 +8,7 @@
   <b>Download public videos into transcripts and structured data.</b>
 </p>
 
-<p align="center">
-  <a href="README.md">
-    <img src="https://img.shields.io/static/v1?label=&message=English&color=111827&style=for-the-badge" alt="English" height="24" />
-  </a>
-  <a href="README_zh.md">
-    <img src="https://img.shields.io/static/v1?label=&message=%E4%B8%AD%E6%96%87&color=111827&style=for-the-badge" alt="中文" height="24" />
-  </a>
-</p>
+<p align="center"><img src="docs/assets/lang-en-active.svg" alt="English" width="88" height="28" />&nbsp;&nbsp;<a href="README_zh.md"><img src="docs/assets/lang-zh.svg" alt="中文" width="88" height="28" /></a></p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-20%2B-brightgreen" alt="Node.js 20+" />

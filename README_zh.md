@@ -17,33 +17,66 @@
   <img src="https://img.shields.io/badge/License-MIT-black" alt="MIT License" />
 </p>
 
-## 快速开始
+## 支持平台
+
+| 平台           |      状态 | 说明                                 |
+| -------------- | --------: | ------------------------------------ |
+| 抖音           | ✅ 已支持 | 公开视频；支持合流/分离流下载与合并  |
+| B站 / Bilibili | ✅ 已支持 | 公开视频；支持 DASH 合并与播放流兜底 |
+| 小红书         | ✅ 已支持 | 公开视频笔记；支持笔记定位与媒体兜底 |
+| 更多平台       | 🚧 计划中 | 可通过平台适配层继续扩展             |
+
+## 功能特性
+
+- **多平台视频下载**：支持已接入平台的公开视频链接。
+- **浏览器拦截提取**：通过 Playwright 捕获媒体地址，不依赖 yt-dlp 或第三方解析 API。
+- **本地语音转写**：通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 在本地生成文案，不依赖云 API；可选 [OpenCC](https://github.com/BYVoid/OpenCC) 繁→简转换。
+- **结构化输出**：保存视频元数据、TXT 文案和 JSON 结果。
+- **分离流支持**：B站和抖音遇到视频/音频分离媒体流时，会自动下载并通过 ffmpeg 合并。
+- **运行时兜底**：结合平台 API、页面状态和浏览器实际观察到的媒体响应，提高 B站/抖音/小红书稳定性。
+- **媒体轨道校验**：只有最终 MP4 同时包含视频轨和音频轨，才会被标记为完成。
+- **断点续跑**：重复运行时可跳过已完成下载和已有转写结果；失败项支持指数退避重试。
+- **Agent Skill 可用**：可作为 Claude / Codex 类助手的 Skill 使用。
+
+## 适用范围与限制
+
+本工具面向公开视频内容和本地处理流程。它会下载公开视频、提取元数据，并可选地在本地进行语音转写。
+
+它不会：
+
+- 上传视频或转写结果到外部服务
+- 处理私密内容或强登录内容
+- 绕过平台访问控制
+- 对画面文字做 OCR
+
+其他实际限制：
+
+- 首次使用 Whisper 模型会下载约 500 MB —— 这是正常现象，不是卡住
+- CPU 转写：1 分钟音频约 12 秒（GPU：约 0.4 秒）
+- 部分视频可能触发验证码 —— 使用 `--headed` 模式
+- B站高画质视频需要 ffmpeg 合并 DASH 流
+- 抖音可能返回视频/音频分离流；纯音频资源会被拒绝，不会误存为视频
+- 小红书仅支持视频笔记，不支持图文笔记；公开视频笔记即使出现登录弹窗，也可能通过页面状态和媒体响应解析
+- 短分享链接可能过期或跳转到无关推荐页；可用时优先使用平台规范 URL
+- 转写仅限语音内容，不包含屏幕文字识别
+
+## 前置条件
+
+- Node.js 20+
+- Python 3.10+
+- [ffmpeg](https://ffmpeg.org/)（需要在 `PATH` 中）
+
+默认转写配置为 `medium + cuda + float16 + zh`，更适合具备可用 NVIDIA CUDA 环境的电脑。
+
+如果你的电脑不支持 CUDA，或默认转写启动失败，建议显式改用：
 
 ```bash
-git clone https://github.com/ljb1020/video-batch-download.git
-cd video-batch-download
-
-npm install
-node scripts/setup.mjs
-
-pip install -U faster-whisper opencc
+--device cpu --compute-type int8 --model small
 ```
 
-同时需要系统已安装 [ffmpeg](https://ffmpeg.org/)，并确保可在 `PATH` 中调用。
+## 安装
 
-下载并转写一个视频：
-
-```bash
-node scripts/download.mjs "https://v.douyin.com/xxxxx"
-```
-
-跳过转写，只下载视频和元数据：
-
-```bash
-node scripts/download.mjs "https://v.douyin.com/xxxxx" --no-transcribe
-```
-
-## 作为 Agent Skill 使用
+### 作为 Agent Skill 安装
 
 直接对你的 AI 助手说：
 
@@ -61,62 +94,39 @@ git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.cla
 
 在 Claude Code 中，直接粘贴公开视频链接并要求下载或提取文案：
 
-> "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"  
-> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"  
+> "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
+> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
 > "下载这个小红书视频 http://xhslink.com/xxxxx"
 
-## 支持平台
-
-| 平台           |      状态 | 说明                                      |
-| -------------- | --------: | ----------------------------------------- |
-| 抖音           | ✅ 已支持 | 公开视频链接，支持合流和分离媒体流        |
-| B站 / Bilibili | ✅ 已支持 | 支持公开视频，支持 DASH 合并和播放流兜底  |
-| 小红书         | ✅ 已支持 | 支持公开视频笔记，支持目标笔记和媒体兜底  |
-| 更多平台       |    计划中 | 后续可通过平台适配层扩展                  |
-
-## 功能特性
-
-- **多平台视频下载**：支持已接入平台的公开视频链接。
-- **浏览器拦截提取**：通过 Playwright 捕获媒体地址，不依赖 yt-dlp 或第三方解析 API。
-- **本地语音转写**：通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 在本地生成文案，不依赖云 API；可选 [OpenCC](https://github.com/BYVoid/OpenCC) 繁→简转换。
-- **结构化输出**：保存视频元数据、TXT 文案和 JSON 结果。
-- **分离流支持**：B站和抖音遇到视频/音频分离媒体流时，会自动下载并通过 ffmpeg 合并。
-- **运行时兜底**：结合平台 API、页面状态和浏览器实际观察到的媒体响应，提高 B站/抖音/小红书稳定性。
-- **媒体轨道校验**：只有最终 MP4 同时包含视频轨和音频轨，才会被标记为完成。
-- **断点续跑**：重复运行时可跳过已完成下载和已有转写结果；失败项支持指数退避重试。
-- **Agent Skill 可用**：可作为 Claude / Codex 类助手的 Skill 使用。
-
-## 前置条件
-
-- Node.js 20+
-- Python 3.10+
-- [ffmpeg](https://ffmpeg.org/)（需要在 `PATH` 中）
-
-默认转写配置为 `medium + cuda + float16 + zh`，更适合具备可用 NVIDIA CUDA 环境的电脑。  
-如果你的电脑不支持 CUDA，或默认转写启动失败，建议显式改用：
+### 作为命令行工具安装
 
 ```bash
---device cpu --compute-type int8 --model small
-```
+git clone https://github.com/ljb1020/video-batch-download.git
+cd video-batch-download
 
-## 安装
-
-### 1. 安装 Node.js 依赖
-
-```bash
 npm install
 node scripts/setup.mjs
+
+pip install -U faster-whisper opencc
 ```
 
 `setup.mjs` 会验证 Playwright 环境，并仅在需要时安装 Chromium。
 
-### 2. 安装 Python 依赖（用于转写）
+如果只需要下载视频和元数据，可以不装 Python 依赖，并始终加上 `--no-transcribe`。
+
+## 快速开始
+
+下载并转写一个视频：
 
 ```bash
-pip install -U faster-whisper opencc
+node scripts/download.mjs "https://v.douyin.com/xxxxx"
 ```
 
-如果只需要下载视频和元数据，可以不装 Python 依赖，并始终加上 `--no-transcribe`。
+跳过转写，只下载视频和元数据：
+
+```bash
+node scripts/download.mjs "https://v.douyin.com/xxxxx" --no-transcribe
+```
 
 ## 使用方法
 
@@ -182,24 +192,6 @@ node scripts/download.mjs "url" --device cpu --compute-type int8 --model small
 node scripts/download.mjs --input links.txt --output ./downloads --headed
 ```
 
-## 工作流程
-
-```txt
-视频链接
-    ↓
-Playwright 打开页面并捕获媒体地址
-    ↓
-下载视频 / 音频流到 <output>/.temp 缓存
-    ↓
-必要时通过 ffmpeg 合并 DASH 流
-    ↓
-提取音频并通过 faster-whisper 本地转写
-    ↓
-保存 MP4、元数据 JSON 和 TXT 文案
-```
-
-解析与下载默认并发为 `1`，更稳定，可通过 CLI 参数提高。Whisper 模型在进程内加载一次并复用。
-
 ## 输出结果
 
 每个视频一个独立目录：
@@ -222,6 +214,9 @@ video_results/
 使用同一输出目录重跑时，会复用 `download-state.json` 做断点续传。
 
 ### JSON 格式
+
+<details>
+<summary>JSON 示例</summary>
 
 ```json
 {
@@ -281,6 +276,8 @@ video_results/
 }
 ```
 
+</details>
+
 ## 命令行参数
 
 <details>
@@ -319,27 +316,23 @@ video_results/
 
 </details>
 
-## 适用范围与限制
+## 工作流程
 
-本工具面向公开视频内容和本地处理流程。它会下载公开视频、提取元数据，并可选地在本地进行语音转写。
+```txt
+视频链接
+    ↓
+Playwright 打开页面并捕获媒体地址
+    ↓
+下载视频 / 音频流到 <output>/.temp 缓存
+    ↓
+必要时通过 ffmpeg 合并 DASH 流
+    ↓
+提取音频并通过 faster-whisper 本地转写
+    ↓
+保存 MP4、元数据 JSON 和 TXT 文案
+```
 
-它不会：
-
-- 上传视频或转写结果到外部服务
-- 处理私密内容或强登录内容
-- 绕过平台访问控制
-- 对画面文字做 OCR
-
-其他实际限制：
-
-- 首次使用 Whisper 模型会下载约 500 MB —— 这是正常现象，不是卡住
-- CPU 转写：1 分钟音频约 12 秒（GPU：约 0.4 秒）
-- 部分视频可能触发验证码 —— 使用 `--headed` 模式
-- B站高画质视频需要 ffmpeg 合并 DASH 流
-- 抖音可能返回视频/音频分离流；纯音频资源会被拒绝，不会误存为视频
-- 小红书仅支持视频笔记，不支持图文笔记；公开视频笔记即使出现登录弹窗，也可能通过页面状态和媒体响应解析
-- 短分享链接可能过期或跳转到无关推荐页；可用时优先使用平台规范 URL
-- 转写仅限语音内容，不包含屏幕文字识别
+解析与下载默认并发为 `1`，更稳定，可通过 CLI 参数提高。Whisper 模型在进程内加载一次并复用。
 
 ## 参考文档
 

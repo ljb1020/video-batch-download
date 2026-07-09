@@ -17,33 +17,66 @@
   <img src="https://img.shields.io/badge/License-MIT-black" alt="MIT License" />
 </p>
 
-## Quick Start
+## Supported Platforms
+
+| Platform       |        Status | Notes                                             |
+| -------------- | ------------: | ------------------------------------------------- |
+| Douyin         | ✅ Supported  | Public videos; merged/separated stream handling   |
+| Bilibili       | ✅ Supported  | Public videos; DASH merge and playurl fallbacks   |
+| Xiaohongshu    | ✅ Supported  | Public video notes; note and media fallbacks      |
+| More platforms |    🚧 Planned | Extendable through the platform adapter layer     |
+
+## Features
+
+- **Multi-platform video download** — supports public videos from currently integrated platforms.
+- **Browser-based extraction** — captures media URLs via Playwright, without yt-dlp or third-party parsing APIs.
+- **Local transcription** — uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) to generate transcripts without cloud APIs; optional Traditional→Simplified conversion via [OpenCC](https://github.com/BYVoid/OpenCC).
+- **Structured output** — saves metadata, transcript text, and JSON output locally.
+- **Separated stream support** — downloads and merges separated video/audio streams with ffmpeg for Bilibili and Douyin when needed.
+- **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Xiaohongshu reliability.
+- **Media track validation** — treats an item as completed only after the final MP4 has both video and audio tracks.
+- **Resumable workflow** — reruns can skip completed downloads and existing transcripts; failed items auto-retry with exponential backoff.
+- **Agent Skill ready** — can be installed as a Claude/Codex-style assistant skill.
+
+## Scope and Limitations
+
+This tool is designed for public video content and local processing. It downloads public videos, extracts metadata, and optionally transcribes speech locally.
+
+It does not:
+
+- upload media or transcripts to external services
+- process private or login-required content
+- bypass platform access controls
+- perform OCR on visual text
+
+Additional practical limits:
+
+- First Whisper model use downloads ~500 MB — this is normal, not a hang
+- CPU transcription: ~12 seconds per minute of audio (GPU: ~0.4 seconds)
+- Some videos may require verification challenges — use `--headed` mode
+- Bilibili high-quality videos require ffmpeg for DASH stream merging
+- Douyin may return separated video/audio streams; audio-only resources are rejected instead of being saved as videos
+- Xiaohongshu image/text notes are not supported (video notes only); public video notes can still work when a login overlay is shown
+- Short share links may expire or redirect to unrelated feed pages; use canonical URLs when available
+- Transcription is speech-only; on-screen text is not captured
+
+## Prerequisites
+
+- Node.js 20+
+- Python 3.10+
+- [ffmpeg](https://ffmpeg.org/) (must be on `PATH`)
+
+The default transcription profile is `medium + cuda + float16 + zh`, which works best on machines with a usable NVIDIA CUDA environment.
+
+If CUDA is unavailable or default transcription startup fails, run with:
 
 ```bash
-git clone https://github.com/ljb1020/video-batch-download.git
-cd video-batch-download
-
-npm install
-node scripts/setup.mjs
-
-pip install -U faster-whisper opencc
+--device cpu --compute-type int8 --model small
 ```
 
-Also requires [ffmpeg](https://ffmpeg.org/) on `PATH`.
+## Installation
 
-Download and transcribe one video:
-
-```bash
-node scripts/download.mjs "https://v.douyin.com/xxxxx"
-```
-
-Skip transcription (download video and metadata only):
-
-```bash
-node scripts/download.mjs "https://v.douyin.com/xxxxx" --no-transcribe
-```
-
-## Use as an Agent Skill
+### Use as an Agent Skill
 
 Tell your AI assistant:
 
@@ -61,62 +94,39 @@ git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.cla
 
 In Claude Code, paste a public video link and ask for download or transcript extraction:
 
-> "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"  
-> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"  
+> "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
+> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
 > "下载这个小红书视频 http://xhslink.com/xxxxx"
 
-## Supported Platforms
-
-| Platform       |       Status | Notes                                                       |
-| -------------- | -----------: | ----------------------------------------------------------- |
-| Douyin         | ✅ Supported | Public video links; merged and separated media streams      |
-| Bilibili       | ✅ Supported | Public videos, DASH merge and playurl fallbacks supported   |
-| Xiaohongshu    | ✅ Supported | Public video notes; target note-state and media fallbacks   |
-| More platforms |      Planned | The platform adapter layer can be extended                  |
-
-## Features
-
-- **Multi-platform video download** — supports public videos from currently integrated platforms.
-- **Browser-based extraction** — captures media URLs via Playwright, without yt-dlp or third-party parsing APIs.
-- **Local transcription** — uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) to generate transcripts without cloud APIs; optional Traditional→Simplified conversion via [OpenCC](https://github.com/BYVoid/OpenCC).
-- **Structured output** — saves metadata, transcript text, and JSON output locally.
-- **Separated stream support** — downloads and merges separated video/audio streams with ffmpeg for Bilibili and Douyin when needed.
-- **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Xiaohongshu reliability.
-- **Media track validation** — treats an item as completed only after the final MP4 has both video and audio tracks.
-- **Resumable workflow** — reruns can skip completed downloads and existing transcripts; failed items auto-retry with exponential backoff.
-- **Agent Skill ready** — can be installed as a Claude/Codex-style assistant skill.
-
-## Prerequisites
-
-- Node.js 20+
-- Python 3.10+
-- [ffmpeg](https://ffmpeg.org/) (must be on `PATH`)
-
-The default transcription profile is `medium + cuda + float16 + zh`, which works best on machines with a usable NVIDIA CUDA environment.  
-If CUDA is unavailable or default transcription startup fails, run with:
+### Install as a CLI Tool
 
 ```bash
---device cpu --compute-type int8 --model small
-```
+git clone https://github.com/ljb1020/video-batch-download.git
+cd video-batch-download
 
-## Installation
-
-### 1. Install Node.js dependencies
-
-```bash
 npm install
 node scripts/setup.mjs
+
+pip install -U faster-whisper opencc
 ```
 
 `setup.mjs` verifies Playwright and installs Chromium only when needed.
 
-### 2. Install Python dependencies (for transcription)
+If you only need download and metadata, you can skip Python dependencies and always pass `--no-transcribe`.
+
+## Quick Start
+
+Download and transcribe one video:
 
 ```bash
-pip install -U faster-whisper opencc
+node scripts/download.mjs "https://v.douyin.com/xxxxx"
 ```
 
-If you only need download and metadata, you can skip Python dependencies and always pass `--no-transcribe`.
+Skip transcription (download video and metadata only):
+
+```bash
+node scripts/download.mjs "https://v.douyin.com/xxxxx" --no-transcribe
+```
 
 ## Usage
 
@@ -182,24 +192,6 @@ node scripts/download.mjs "url" --device cpu --compute-type int8 --model small
 node scripts/download.mjs --input links.txt --output ./downloads --headed
 ```
 
-## How It Works
-
-```txt
-Video URL(s)
-    ↓
-Playwright opens the page and detects media URLs
-    ↓
-Download video / audio streams into <output>/.temp cache
-    ↓
-Merge DASH streams with ffmpeg when needed
-    ↓
-Extract audio and transcribe with faster-whisper
-    ↓
-Save MP4, metadata JSON, and TXT transcript locally
-```
-
-Parse and download concurrency default to `1` for stability and can be raised with CLI flags. The Whisper model is loaded once per process and reused across items.
-
 ## Output
 
 Each video gets its own subdirectory:
@@ -222,6 +214,9 @@ By default, the final MP4 is copied into the per-video folder as a user-facing a
 Rerun with the same output directory to resume from `download-state.json`.
 
 ### JSON format
+
+<details>
+<summary>Example JSON</summary>
 
 ```json
 {
@@ -281,6 +276,8 @@ Rerun with the same output directory to resume from `download-state.json`.
 }
 ```
 
+</details>
+
 ## CLI Options
 
 <details>
@@ -319,27 +316,23 @@ Rerun with the same output directory to resume from `download-state.json`.
 
 </details>
 
-## Scope and Limitations
+## How It Works
 
-This tool is designed for public video content and local processing. It downloads public videos, extracts metadata, and optionally transcribes speech locally.
+```txt
+Video URL(s)
+    ↓
+Playwright opens the page and detects media URLs
+    ↓
+Download video / audio streams into <output>/.temp cache
+    ↓
+Merge DASH streams with ffmpeg when needed
+    ↓
+Extract audio and transcribe with faster-whisper
+    ↓
+Save MP4, metadata JSON, and TXT transcript locally
+```
 
-It does not:
-
-- upload media or transcripts to external services
-- process private or login-required content
-- bypass platform access controls
-- perform OCR on visual text
-
-Additional practical limits:
-
-- First Whisper model use downloads ~500 MB — this is normal, not a hang
-- CPU transcription: ~12 seconds per minute of audio (GPU: ~0.4 seconds)
-- Some videos may require verification challenges — use `--headed` mode
-- Bilibili high-quality videos require ffmpeg for DASH stream merging
-- Douyin may return separated video/audio streams; audio-only resources are rejected instead of being saved as videos
-- Xiaohongshu image/text notes are not supported (video notes only); public video notes can still work when a login overlay is shown
-- Short share links may expire or redirect to unrelated feed pages; use canonical URLs when available
-- Transcription is speech-only; on-screen text is not captured
+Parse and download concurrency default to `1` for stability and can be raised with CLI flags. The Whisper model is loaded once per process and reused across items.
 
 ## Reference Docs
 

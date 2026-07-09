@@ -6,9 +6,9 @@
 **输出**：每条视频的结构化信息，包含平台名、发帖人、发帖时间、视频标题、视频描述、视频文案（语音转文字）
 
 **支持平台**：
-- 抖音（Douyin）— 单流 MP4
-- B站（Bilibili）— DASH 多流（视频+音频分离）自动合并
-- 小红书（Xiaohongshu）— 视频笔记单流 MP4
+- 抖音（Douyin）— 合流 MP4 或视频/音频分离流，自动合并并校验轨道
+- B站（Bilibili）— DASH 多流（视频+音频分离）自动合并，支持播放流兜底
+- 小红书（Xiaohongshu）— 视频笔记单流 MP4，支持目标笔记状态和媒体响应兜底
 
 ---
 
@@ -40,16 +40,17 @@
 │  }                                          │
 │                                             │
 │  ├─ DouyinParser (抖音)                     │
-│  │   拦截 /aweme/v1/web/aweme/detail/      │
-│  │   返回单流：[{url, type: "video+audio"}] │
+│  │   拦截 detail/CDN，补充页面 runtime 媒体  │
+│  │   返回合流或 video+audio 分离流           │
 │  │                                          │
 │  ├─ BilibiliParser (B站)                    │
-│      拦截 /x/web-interface/view (元数据)    │
-│      拦截 /x/player/playurl (视频流)        │
+│      拦截 view/playurl，读取 __playinfo__   │
+│      必要时主动请求 x/player/playurl        │
 │      返回 DASH 双流或单流 fallback           │
 │                                             │
 │  └─ XiaohongshuParser (小红书)              │
-│      拦截 /api/sns/web/v1/feed 或 note/info │
+│      按目标 noteId 读取 __INITIAL_STATE__   │
+│      拦截/兜底 xhscdn 视频响应              │
 │      返回单流：[{url, type: "video+audio"}] │
 └──────────────────┬──────────────────────────┘
                    ↓
@@ -61,6 +62,8 @@
 │  多流 (video + audio) →                     │
 │    并行下载 → 视频 copy / 音频 AAC 合并       │
 │    清理分轨中间文件，保留合并 MP4 缓存        │
+│                                             │
+│  完成前校验最终 MP4 同时含视频轨和音频轨      │
 └──────────────────┬──────────────────────────┘
                    ↓
          （后续流程：转写、输出 — 平台无关）
@@ -82,24 +85,39 @@
 
 ### 3.1 抖音（DouyinParser）
 
-**API 拦截**：
+**API / 媒体来源**：
 - `/aweme/v1/web/aweme/detail/` — 元数据（标题/作者/统计/时长）
-- `douyinvod.com` CDN — 视频 URL
+- `douyinvod.com` CDN — 合流或分离媒体 URL
+- 页面 runtime fallback — `video.currentSrc` 与 `performance` 中浏览器实际请求过的媒体资源
+
+**选流策略**：
+- `media-video-*` 视为纯视频轨，必须搭配 `media-audio-*`
+- `media-audio-*` 视为纯音频轨，不能作为 `video+audio` 成功输出
+- 优先使用可下载的 `video.currentSrc` 合流 URL；否则使用 video+audio 分离流并通过 ffmpeg 合并
 
 **输出**：
 ```js
+// 合流
 mediaStreams: [{
   url: "https://v26.douyinvod.com/...",
   type: "video+audio",
   format: "mp4"
 }]
+
+// 分离流
+mediaStreams: [
+  { url: "https://v26.douyinvod.com/.../media-video-avc1/", type: "video", format: "mp4" },
+  { url: "https://v26.douyinvod.com/.../media-audio-und-mp4a/", type: "audio", format: "mp4" }
+]
 ```
 
 ### 3.2 B站（BilibiliParser）
 
-**API 拦截**：
+**API / 媒体来源**：
 - `/x/web-interface/view?bvid=...` — 元数据（标题/作者/统计/时长/描述）
 - `/x/player/(wbi/)?playurl?...` — 视频流 URL
+- 页面 `window.__playinfo__` — 当 response 监听没捕获到 `playurl` 时作为兜底
+- 主动请求 `/x/player/playurl` — 使用 `bvid/aid + cid` 请求 DASH 或 durl fallback
 
 **DASH 格式处理**：
 ```js
@@ -125,13 +143,15 @@ mediaStreams: [{
 
 ### 3.3 小红书（XiaohongshuParser）
 
-**API 拦截**：
-- `/api/sns/web/v1/feed` — 笔记元数据
+**API / 媒体来源**：
+- `/api/sns/web/v1/feed` — 笔记元数据候选
 - `/api/sns/web/v1/note/info` — 笔记详情兜底
-- `xhscdn.com` CDN — 视频 URL
+- 页面 `window.__INITIAL_STATE__` — 按 URL 中的目标 noteId 精准读取 `noteDetailMap[noteId]`
+- `xhscdn.com` CDN — 视频 URL，包含页面 runtime 和媒体响应兜底
 
 **限制**：
 - 仅支持视频笔记，不支持图文笔记
+- 登录弹窗不一定代表无法解析；公开笔记可能已经在页面状态和媒体响应中暴露视频数据
 
 **输出**：
 ```js

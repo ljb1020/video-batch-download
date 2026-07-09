@@ -87,6 +87,10 @@ export class DouyinParser extends PlatformParser {
       const pageTitle = sanitizeName(await page.title().catch(() => ""));
       const bodyText = await page.locator("body").innerText({ timeout: 3_000 }).catch(() => "");
 
+      for (const candidate of await this._collectRuntimeMediaCandidates(page)) {
+        addCandidate(candidate);
+      }
+
       // Check for permanent failures
       if (/作品不存在|视频不见了|已删除|暂无权限|私密作品/u.test(bodyText)) {
         permanentReason = bodyText.match(/作品不存在|视频不见了|已删除|暂无权限|私密作品/u)?.[0];
@@ -146,24 +150,15 @@ export class DouyinParser extends PlatformParser {
   }
 
   _selectMediaStreams(candidates) {
-    const mergedCandidates = candidates.filter((candidate) =>
-      !this._isDashVideoUrl(candidate.url) && !this._isDashAudioUrl(candidate.url)
-    );
+    const mergedCandidates = candidates.filter((candidate) => this._isMergedVideoUrl(candidate.url));
     const dashVideos = candidates.filter((candidate) => this._isDashVideoUrl(candidate.url));
     const dashAudios = candidates.filter((candidate) => this._isDashAudioUrl(candidate.url));
-    const best = candidates[0];
 
-    if (best && this._isDashVideoUrl(best.url)) {
-      if (dashAudios[0]) return this._dashStreams(best, dashAudios[0]);
-      if (mergedCandidates[0]) return [this._mergedStream(mergedCandidates[0])];
-      const audio = this._deriveDashAudioCandidate(best);
-      if (audio) return this._dashStreams(best, audio);
-      const err = new Error("Douyin DASH audio stream not found");
-      err.permanent = true;
-      throw err;
-    }
-
-    if (mergedCandidates[0]) return [this._mergedStream(mergedCandidates[0])];
+    // Prefer an actual <video>.currentSrc if it is a downloadable URL. Generic
+    // aweme/v1/play URLs from detail JSON can point to audio-only resources, so
+    // don't let them outrank an explicit DASH video+audio pair.
+    const currentSrcMerged = mergedCandidates.find((candidate) => candidate.source === "video-current-src");
+    if (currentSrcMerged) return [this._mergedStream(currentSrcMerged)];
 
     if (dashVideos[0]) {
       const audio = dashAudios[0] ?? this._deriveDashAudioCandidate(dashVideos[0]);
@@ -200,22 +195,55 @@ export class DouyinParser extends PlatformParser {
   }
 
   _isDashVideoUrl(url) {
-    return /media-video-avc1/i.test(url);
+    return /media-video-/i.test(url);
   }
 
   _isDashAudioUrl(url) {
-    return /media-audio-mp4a/i.test(url);
+    return /media-audio-/i.test(url);
+  }
+
+  _isMergedVideoUrl(url) {
+    if (!/^https?:\/\//i.test(url)) return false;
+    if (this._isDashVideoUrl(url) || this._isDashAudioUrl(url)) return false;
+    return /(douyinvod\.com|aweme\/v1\/play)/i.test(url);
   }
 
   _deriveDashAudioCandidate(videoCandidate) {
     if (!this._isDashVideoUrl(videoCandidate.url)) return null;
-    const audioUrl = videoCandidate.url.replace(/media-video-avc1/ig, "media-audio-mp4a");
-    if (audioUrl === videoCandidate.url) return null;
-    return {
-      url: audioUrl,
-      totalBytes: 0,
-      source: "derived-dash-audio",
-    };
+    const variants = ["media-audio-und-mp4a", "media-audio-mp4a"];
+    for (const audioSegment of variants) {
+      const audioUrl = videoCandidate.url.replace(/media-video-[^/?]+/i, audioSegment);
+      if (audioUrl !== videoCandidate.url) {
+        return {
+          url: audioUrl,
+          totalBytes: 0,
+          source: "derived-dash-audio",
+        };
+      }
+    }
+    return null;
+  }
+
+  async _collectRuntimeMediaCandidates(page) {
+    return await page.evaluate(() => {
+      const candidates = [];
+      const push = (url, source, totalBytes = 0) => {
+        if (!url || !/^https?:\/\//i.test(url)) return;
+        if (!/(douyinvod\.com|aweme\/v1\/play)/i.test(url)) return;
+        if (candidates.some((item) => item.url === url)) return;
+        candidates.push({ url, totalBytes, source });
+      };
+
+      for (const video of document.querySelectorAll("video")) {
+        push(video.currentSrc || video.src, "video-current-src");
+      }
+
+      for (const entry of performance.getEntriesByType("resource")) {
+        push(entry.name, "performance-resource", entry.encodedBodySize || entry.transferSize || 0);
+      }
+
+      return candidates;
+    }).catch(() => []);
   }
 
   _collectMediaUrls(value, results, depth = 0) {

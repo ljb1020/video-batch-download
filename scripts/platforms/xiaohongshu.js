@@ -26,9 +26,24 @@ export class XiaohongshuParser extends PlatformParser {
     let feedApiData = null;
     let noteApiData = null;
     let permanentReason = null;
+    const mediaCandidates = [];
+
+    const addMediaCandidate = (candidate) => {
+      if (!candidate.url || mediaCandidates.some((item) => item.url === candidate.url)) return;
+      mediaCandidates.push(candidate);
+    };
 
     page.on("response", async (response) => {
       const responseUrl = response.url();
+      const headers = response.headers();
+      const contentType = headers["content-type"] ?? "";
+
+      if (this._isVideoCdnUrl(responseUrl) || contentType.startsWith("video/")) {
+        const total = Number(
+          headers["content-range"]?.match(/\/(\d+)$/)?.[1] ?? headers["content-length"] ?? 0
+        );
+        addMediaCandidate({ url: responseUrl, totalBytes: total, source: "media-response" });
+      }
 
       // Intercept feed API
       if (/\/api\/sns\/web\/v1\/feed/.test(responseUrl) && response.ok()) {
@@ -59,46 +74,49 @@ export class XiaohongshuParser extends PlatformParser {
         timeout: options.pageTimeoutMs,
       });
 
-      // Wait for API responses
+      const loginRedirect = this._extractLoginRedirect(page.url());
+      if (loginRedirect && XiaohongshuParser.matchesUrl(loginRedirect)) {
+        await page.goto(loginRedirect, {
+          waitUntil: "domcontentloaded",
+          timeout: options.pageTimeoutMs,
+        });
+      }
+
+      const targetNoteId = this._extractNoteIdFromUrl(page.url()) ?? this._extractNoteIdFromUrl(url);
+
+      // Wait for the target note state or media response. Feed APIs may return
+      // unrelated cards, so don't stop early just because a feed response exists.
       const deadline = Date.now() + options.mediaWaitMs;
+      const startedAt = Date.now();
       while (Date.now() < deadline) {
-        if (feedApiData || noteApiData) break;
+        if (noteApiData || mediaCandidates.length > 0 || await this._hasPageNoteState(page, targetNoteId)) break;
+        if (feedApiData && Date.now() - startedAt > 1_500) break;
         await sleep(250);
       }
 
       const finalUrl = page.url();
       const bodyText = await page.locator("body").innerText({ timeout: 3_000 }).catch(() => "");
+      for (const candidate of await this._collectRuntimeMediaCandidates(page)) {
+        addMediaCandidate(candidate);
+      }
 
       // Check for permanent failures
       if (/该笔记已被删除|违规|无法查看|不存在/u.test(bodyText)) {
         permanentReason = bodyText.match(/该笔记已被删除|违规|无法查看|不存在/u)?.[0];
       }
 
-      // Fallback: extract from __INITIAL_STATE__
-      let noteData = this._extractNoteFromApi(feedApiData, noteApiData);
-      if (!noteData) {
-        const pageState = await page.evaluate(() => {
-          const s = window.__INITIAL_STATE__;
-          if (!s) return null;
+      const pageState = await this._extractNoteFromPage(page, targetNoteId);
+      const apiNote = this._extractNoteFromApi(feedApiData, noteApiData, targetNoteId);
+      let noteData = pageState ?? apiNote;
+      const bestMediaCandidate = this._selectBestCdnCandidate(mediaCandidates);
 
-          // __INITIAL_STATE__ 的 note 信息结构可能随版本变化
-          // 常见路径: s.note.noteDetailMap[noteId].note 或 s.note.data
-          const noteMap = s.note?.noteDetailMap ?? s.note?.data?.noteDetailMap;
-          if (noteMap) {
-            const firstKey = Object.keys(noteMap)[0];
-            const entry = noteMap[firstKey];
-            return entry?.note ?? entry ?? null;
-          }
-
-          // 直接在 s.note 下
-          if (s.note?.note) return s.note.note;
-
-          return null;
-        }).catch(() => null);
-
-        if (pageState) {
-          noteData = pageState;
-        }
+      if (!noteData && bestMediaCandidate) {
+        noteData = {
+          id: targetNoteId ?? itemKey(url),
+          type: "video",
+          title: await page.title().catch(() => ""),
+          video: { url: bestMediaCandidate.url },
+        };
       }
 
       if (!noteData) {
@@ -108,17 +126,18 @@ export class XiaohongshuParser extends PlatformParser {
         throw error;
       }
 
+      // 提取视频 URL
+      const videoUrl = this._extractVideoUrl(noteData) ?? bestMediaCandidate?.url ?? null;
+
       // 判断是否为视频笔记
       const noteType = noteData.type ?? noteData.noteType ?? "";
-      const hasVideo = noteType === "video" || noteData.video != null;
+      const hasVideo = noteType === "video" || noteData.video != null || Boolean(videoUrl) || this._urlIndicatesVideo(finalUrl);
       if (!hasVideo) {
         const err = new Error("This is an image/text note, not a video note");
         err.permanent = true;
         throw err;
       }
 
-      // 提取视频 URL
-      const videoUrl = this._extractVideoUrl(noteData);
       if (!videoUrl) {
         throw new Error("No video URL found in note data");
       }
@@ -180,19 +199,101 @@ export class XiaohongshuParser extends PlatformParser {
   /**
    * Extract note data from intercepted API responses.
    */
-  _extractNoteFromApi(feedData, noteData) {
+  _extractNoteFromApi(feedData, noteData, targetNoteId = null) {
     // Direct note API
-    if (noteData && typeof noteData === "object") {
+    if (noteData && typeof noteData === "object" && this._noteMatches(noteData, targetNoteId)) {
       return noteData;
     }
 
-    // Feed API: response.data.items[0].note_card
+    // Feed API: response.data.items[n].note_card
     if (feedData?.items?.length > 0) {
-      const item = feedData.items[0];
-      return item.note_card ?? item.noteCard ?? item;
+      const notes = feedData.items
+        .map((item) => item.note_card ?? item.noteCard ?? item)
+        .filter(Boolean);
+      return notes.find((note) => this._noteMatches(note, targetNoteId)) ?? notes[0] ?? null;
     }
 
     return null;
+  }
+
+  _noteMatches(note, targetNoteId) {
+    if (!targetNoteId) return true;
+    const noteId = note?.noteId ?? note?.note_id ?? note?.id ?? note?.note_id_str ?? null;
+    return String(noteId) === String(targetNoteId);
+  }
+
+  async _hasPageNoteState(page, targetNoteId) {
+    return Boolean(await page.evaluate((noteId) => {
+      const s = window.__INITIAL_STATE__;
+      if (!s) return false;
+      const noteMap = s.note?.noteDetailMap ?? s.note?.data?.noteDetailMap;
+      if (noteMap) {
+        if (noteId && noteMap[noteId]) return true;
+        return Object.keys(noteMap).length > 0;
+      }
+      return Boolean(s.note?.note);
+    }, targetNoteId).catch(() => false));
+  }
+
+  async _extractNoteFromPage(page, targetNoteId) {
+    return await page.evaluate((noteId) => {
+      const s = window.__INITIAL_STATE__;
+      if (!s) return null;
+
+      const unwrap = (entry) => entry?.note ?? entry ?? null;
+      const noteMap = s.note?.noteDetailMap ?? s.note?.data?.noteDetailMap;
+      if (noteMap) {
+        if (noteId && noteMap[noteId]) return unwrap(noteMap[noteId]);
+        const firstKey = Object.keys(noteMap)[0];
+        return firstKey ? unwrap(noteMap[firstKey]) : null;
+      }
+
+      if (s.note?.note) return s.note.note;
+      return null;
+    }, targetNoteId).catch(() => null);
+  }
+
+  _extractLoginRedirect(url) {
+    try {
+      const parsed = new URL(url);
+      if (!/xiaohongshu\.com$/i.test(parsed.hostname) && !/\.xiaohongshu\.com$/i.test(parsed.hostname)) return null;
+      const redirectPath = parsed.searchParams.get("redirectPath");
+      if (!redirectPath) return null;
+      const redirect = new URL(redirectPath, parsed.origin);
+      return redirect.href;
+    } catch {
+      return null;
+    }
+  }
+
+  _urlIndicatesVideo(url) {
+    try {
+      return new URL(url).searchParams.get("type") === "video";
+    } catch {
+      return false;
+    }
+  }
+
+  async _collectRuntimeMediaCandidates(page) {
+    return await page.evaluate(() => {
+      const candidates = [];
+      const push = (url, source, totalBytes = 0) => {
+        if (!url || !/^https?:\/\//i.test(url)) return;
+        if (!/xhscdn\.com/i.test(url) || !/(\.mp4|m3u8|sns-video)/i.test(url)) return;
+        if (candidates.some((item) => item.url === url)) return;
+        candidates.push({ url, totalBytes, source });
+      };
+
+      for (const entry of performance.getEntriesByType("resource")) {
+        push(entry.name, "performance-resource", entry.encodedBodySize || entry.transferSize || 0);
+      }
+
+      for (const video of document.querySelectorAll("video")) {
+        push(video.currentSrc || video.src, "video-current-src");
+      }
+
+      return candidates;
+    }).catch(() => []);
   }
 
   _normalizeDuration(duration) {
@@ -208,20 +309,17 @@ export class XiaohongshuParser extends PlatformParser {
     const video = noteData.video ?? {};
     const media = video.media ?? {};
 
-    // Try stream URLs from video.media.stream (h264/h265)
+    // Try stream URLs from video.media.stream. Prefer h264 for broad ffmpeg/device
+    // compatibility, then fall back to h265/av1/h266 if needed.
     const stream = media.stream ?? {};
     const candidates = [
-      ...(Array.isArray(stream.h264) ? stream.h264 : []),
-      ...(Array.isArray(stream.h265) ? stream.h265 : []),
+      ...this._tagStreams(stream.h264, "h264"),
+      ...this._tagStreams(stream.h265, "h265"),
+      ...this._tagStreams(stream.av1, "av1"),
+      ...this._tagStreams(stream.h266, "h266"),
     ];
-    if (candidates.length > 0) {
-      const master = candidates[0];
-      // master.url or master.masterUrl
-      const masterUrl = master.masterUrl ?? master.url;
-      if (masterUrl && /xhscdn\.com/i.test(masterUrl)) {
-        return masterUrl;
-      }
-    }
+    const best = this._selectBestStream(candidates);
+    if (best?.url) return best.url;
 
     // Try video.consumer.originVideoKey or video.url
     const originKey = video.consumer?.originVideoKey ?? video.originVideoKey;
@@ -241,13 +339,56 @@ export class XiaohongshuParser extends PlatformParser {
     return this._findCdnUrl(noteData);
   }
 
+  _tagStreams(streams, codec) {
+    return (Array.isArray(streams) ? streams : [])
+      .map((stream) => ({ ...stream, _codec: codec }))
+      .filter((stream) => this._streamUrl(stream));
+  }
+
+  _streamUrl(stream) {
+    return stream?.masterUrl ?? stream?.url ?? null;
+  }
+
+  _selectBestStream(streams) {
+    const scored = streams
+      .map((stream) => ({ stream, url: this._streamUrl(stream), score: this._streamScore(stream) }))
+      .filter((item) => item.url && /xhscdn\.com/i.test(item.url));
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0] ?? null;
+  }
+
+  _streamScore(stream) {
+    const codecScore = { h264: 4, h265: 3, av1: 2, h266: 1 }[stream?._codec] ?? 0;
+    const width = Number(stream?.width ?? 0);
+    const height = Number(stream?.height ?? 0);
+    const pixels = width * height;
+    const bitrate = Number(stream?.avgBitrate ?? stream?.videoBitrate ?? 0);
+    const size = Number(stream?.size ?? 0);
+    return codecScore * 1_000_000_000_000 + pixels * 1_000 + bitrate + Math.min(size, 1_000_000_000) / 1_000;
+  }
+
+  _selectBestCdnCandidate(candidates) {
+    const scored = candidates
+      .filter((candidate) => this._isVideoCdnUrl(candidate.url))
+      .map((candidate) => ({
+        candidate,
+        score: Number(candidate.totalBytes ?? 0) + (candidate.url.includes("sns-video") ? 1_000 : 0),
+      }));
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0]?.candidate ?? null;
+  }
+
+  _isVideoCdnUrl(url) {
+    return /^https?:\/\/[^\s"']*xhscdn\.com\//i.test(url) && /(sns-video|\.mp4|m3u8)/i.test(url);
+  }
+
   /**
    * Deep search for CDN video URLs in the note data.
    */
   _findCdnUrl(obj, depth = 0) {
     if (depth > 10 || obj == null) return null;
     if (typeof obj === "string") {
-      if (/^https?:\/\/sns-video-[\w]+\.xhscdn\.com/.test(obj)) return obj;
+      if (this._isVideoCdnUrl(obj)) return obj;
       return null;
     }
     if (Array.isArray(obj)) {

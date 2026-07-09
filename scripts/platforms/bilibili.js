@@ -84,6 +84,8 @@ export class BilibiliParser extends PlatformParser {
           return {
             bvid: vd.bvid,
             aid: vd.aid,
+            cid: vd.cid,
+            pages: vd.pages,
             title: vd.title,
             desc: vd.desc,
             duration: vd.duration,
@@ -105,7 +107,18 @@ export class BilibiliParser extends PlatformParser {
       }
 
       if (!playurlApiData) {
-        const err = new Error("No Bilibili playurl API response");
+        playurlApiData = await this._extractPlayinfoFromPage(page);
+      }
+
+      if (!playurlApiData) {
+        playurlApiData = await this._fetchPlayurlFallback(page, viewApiData, url);
+      }
+
+      if (!playurlApiData) {
+        const bvid = viewApiData?.bvid ?? url.match(/(BV[\w]+)/i)?.[1] ?? null;
+        const cid = this._resolveCid(viewApiData, url);
+        const detail = bvid || cid ? ` (bvid=${bvid ?? "unknown"}, cid=${cid ?? "unknown"})` : "";
+        const err = new Error(`No Bilibili playurl data after page intercept and API fallback${detail}`);
         err.permanent = Boolean(permanentReason);
         throw err;
       }
@@ -163,6 +176,82 @@ export class BilibiliParser extends PlatformParser {
     }
   }
 
+  _resolveCid(viewApiData, url) {
+    const pages = Array.isArray(viewApiData?.pages) ? viewApiData.pages : [];
+    let pageNo = 1;
+    try {
+      const parsedUrl = new URL(url);
+      pageNo = Number.parseInt(parsedUrl.searchParams.get("p") ?? "1", 10);
+      if (!Number.isInteger(pageNo) || pageNo < 1) pageNo = 1;
+    } catch {}
+
+    const requestedPage = pages.find((p) => Number(p?.page) === pageNo) ?? pages[pageNo - 1];
+    return requestedPage?.cid ?? viewApiData?.cid ?? pages[0]?.cid ?? null;
+  }
+
+  _normalizePlayurlData(json) {
+    if (!json) return null;
+    const data = json.data ?? json.result ?? null;
+    if (!data) return null;
+    return this._extractMediaStreams(data).length > 0 ? data : null;
+  }
+
+  async _extractPlayinfoFromPage(page) {
+    const json = await page.evaluate(() => window.__playinfo__ ?? null).catch(() => null);
+    return this._normalizePlayurlData(json);
+  }
+
+  async _fetchJsonFromPage(page, requestUrl) {
+    return await page.evaluate(async (apiUrl) => {
+      const response = await fetch(apiUrl, {
+        credentials: "include",
+        headers: { Accept: "application/json, text/plain, */*" },
+      });
+      const text = await response.text();
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { code: -1, message: `Invalid JSON response: ${text.slice(0, 200)}`, httpStatus: response.status };
+      }
+    }, requestUrl).catch(() => null);
+  }
+
+  async _fetchPlayurlFallback(page, viewApiData, url) {
+    const bvid = viewApiData?.bvid ?? url.match(/(BV[\w]+)/i)?.[1] ?? null;
+    const aid = viewApiData?.aid ?? null;
+    const cid = this._resolveCid(viewApiData, url);
+    if (!cid || (!bvid && aid == null)) return null;
+
+    const variants = [
+      { qn: "80", fnval: "4048" },
+      { qn: "80", fnval: "16" },
+      { qn: "80", fnval: "0" },
+    ];
+
+    for (const variant of variants) {
+      const params = new URLSearchParams({
+        cid: String(cid),
+        qn: variant.qn,
+        fnval: variant.fnval,
+        fnver: "0",
+        fourk: "1",
+        otype: "json",
+        platform: "pc",
+      });
+      if (bvid) params.set("bvid", bvid);
+      else params.set("avid", String(aid));
+
+      const json = await this._fetchJsonFromPage(
+        page,
+        `https://api.bilibili.com/x/player/playurl?${params.toString()}`
+      );
+      const data = this._normalizePlayurlData(json);
+      if (data) return data;
+    }
+
+    return null;
+  }
+
   _extractMediaStreams(playurlData) {
     const streams = [];
 
@@ -175,22 +264,28 @@ export class BilibiliParser extends PlatformParser {
         // Sort by quality descending
         const sortedVideo = [...dash.video].sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
         const videoStream = sortedVideo[0];
-        streams.push({
-          url: videoStream.baseUrl ?? videoStream.base_url,
-          type: "video",
-          format: "m4s",
-          quality: videoStream.height ?? null,
-        });
+        const videoUrl = videoStream.baseUrl ?? videoStream.base_url;
+        if (videoUrl) {
+          streams.push({
+            url: videoUrl,
+            type: "video",
+            format: "m4s",
+            quality: videoStream.height ?? null,
+          });
+        }
       }
 
       // Get audio stream
       if (dash.audio && dash.audio.length > 0) {
         const audioStream = dash.audio[0];
-        streams.push({
-          url: audioStream.baseUrl ?? audioStream.base_url,
-          type: "audio",
-          format: "m4s",
-        });
+        const audioUrl = audioStream.baseUrl ?? audioStream.base_url;
+        if (audioUrl) {
+          streams.push({
+            url: audioUrl,
+            type: "audio",
+            format: "m4s",
+          });
+        }
       }
 
       if (streams.length === 2) {

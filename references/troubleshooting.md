@@ -10,6 +10,8 @@
 
 Rerun with `--headed`. Leave the browser open if Douyin presents a verification prompt. Keep `--parse-concurrency` at the default 1, or reduce it back to 1 if you changed it. Do not increase concurrency to fight throttling.
 
+Short share links can expire, redirect to a feed page, or point to a different item over time. If a short link repeatedly reports no media, open it once in a browser and retry with the canonical platform URL, such as `https://www.douyin.com/video/<id>` or `https://www.xiaohongshu.com/explore/<id>`.
+
 ## A batch was interrupted
 
 Run the same command with the same output directory. `download-state.json` records completed items, and verified MP4 cache files in `<output>/.temp` are reused. Deleting `.temp` does not remove already generated JSON/TXT or item-folder MP4 files, but it prevents cache-based resume/retry for missing video artifacts.
@@ -17,6 +19,10 @@ Run the same command with the same output directory. `download-state.json` recor
 ## A download URL expires
 
 No manual action is required. A failed media transfer causes the item to return to browser parsing and obtain a fresh CDN URL.
+
+## Downloaded file has no video or audio track
+
+The downloader validates the final MP4 before marking an item complete. `has no video track` usually means the platform exposed an audio-only candidate or a stale/partial media URL. `has no audio track` usually means a separated video stream was not paired with its audio stream. Keep the same output directory and rerun so the item can be reparsed; if it repeats for one short link, retry with the canonical URL.
 
 ## Permanent failures
 

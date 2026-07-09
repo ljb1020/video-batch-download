@@ -289,16 +289,23 @@ async function downloadSingleStream(stream, mediaKey, suffix, outputDir, timeout
   }
 }
 
-async function hasAudioTrack(filePath, ffmpegPath) {
+async function getMediaTracks(filePath, ffmpegPath) {
   // Try ffprobe first (more reliable)
   const ffprobePath = ffmpegPath
     ? path.join(path.dirname(ffmpegPath), process.platform === "win32" ? "ffprobe.exe" : "ffprobe")
     : "ffprobe";
 
+  const parseTracks = (text) => {
+    const types = new Set(String(text).split(/\r?\n/).map((line) => line.trim().toLowerCase()).filter(Boolean));
+    return {
+      audio: types.has("audio"),
+      video: types.has("video"),
+    };
+  };
+
   const tryFfprobe = () => new Promise((resolve) => {
     const args = [
       "-v", "error",
-      "-select_streams", "a:0",
       "-show_entries", "stream=codec_type",
       "-of", "csv=p=0",
       filePath,
@@ -321,7 +328,7 @@ async function hasAudioTrack(filePath, ffmpegPath) {
     let stdout = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.on("close", (code) => {
-      if (code === 0) finish(stdout.trim().includes("audio"));
+      if (code === 0) finish(parseTracks(stdout.trim()));
       else finish(null); // ffprobe failed, try ffmpeg
     });
     child.on("error", () => finish(null)); // ffprobe not found
@@ -347,11 +354,12 @@ async function hasAudioTrack(filePath, ffmpegPath) {
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", () => {
-      const hasAudio = stderr.includes("Audio:") ||
-                       (stderr.includes("Stream #") && stderr.includes("audio"));
-      finish(hasAudio);
+      finish({
+        audio: stderr.includes("Audio:") || (stderr.includes("Stream #") && stderr.includes("audio")),
+        video: stderr.includes("Video:") || (stderr.includes("Stream #") && stderr.includes("video")),
+      });
     });
-    child.on("error", () => finish(false)); // ffmpeg not found
+    child.on("error", () => finish(null)); // ffmpeg not found
   });
 
   // Try ffprobe first, then ffmpeg
@@ -360,6 +368,22 @@ async function hasAudioTrack(filePath, ffmpegPath) {
 
   // Fallback to ffmpeg
   return await tryFfmpeg();
+}
+
+async function assertPlayableVideo(filePath, ffmpegPath, label) {
+  const tracks = await getMediaTracks(filePath, ffmpegPath);
+  if (tracks === null) {
+    console.warn(`    [media] ${label} track probe was inconclusive; keeping downloaded video`);
+    return;
+  }
+  if (!tracks.video) {
+    await fsp.rm(filePath, { force: true }).catch(() => {});
+    throw new Error(`${label} has no video track`);
+  }
+  if (!tracks.audio) {
+    await fsp.rm(filePath, { force: true }).catch(() => {});
+    throw new Error(`${label} has no audio track`);
+  }
 }
 
 async function mergeStreams(videoPath, audioPath, mediaKey, outputDir, ffmpegPath) {
@@ -421,14 +445,7 @@ async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
       outputDir,
       timeoutMs
     );
-    const audioOk = await hasAudioTrack(downloaded.filePath, ffmpegPath);
-    if (audioOk === false) {
-      await fsp.rm(downloaded.filePath, { force: true }).catch(() => {});
-      throw new Error("Downloaded video has no audio track");
-    }
-    if (audioOk === null) {
-      console.warn("    [media] audio track probe was inconclusive; keeping downloaded video");
-    }
+    await assertPlayableVideo(downloaded.filePath, ffmpegPath, "Downloaded video");
     return downloaded;
   }
 
@@ -459,16 +476,8 @@ async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
       ffmpegPath
     );
 
-    // Verify audio track exists
-    const audioOk = await hasAudioTrack(mergedPath, ffmpegPath);
-    if (audioOk === false) {
-      const err = new Error("Merged video has no audio track");
-      err.permanent = true;
-      throw err;
-    }
-    if (audioOk === null) {
-      console.warn("    [media] merged audio track probe was inconclusive; keeping merged video");
-    }
+    // Verify both video and audio tracks exist
+    await assertPlayableVideo(mergedPath, ffmpegPath, "Merged video");
 
     // Clean up intermediate files
     await fsp.rm(videoFile.filePath, { force: true });

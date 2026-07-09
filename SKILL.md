@@ -43,8 +43,9 @@ Default transcription uses `medium + cuda + float16 + zh`, which works best on m
 1. **Receive URLs** — User provides one or more Douyin, Bilibili or Xiaohongshu links (or share text containing links). The script auto-extracts valid URLs from any text and routes them to the appropriate platform parser.
 2. **Ask for output directory** — If user doesn't specify, default to `./video_results/`.
 3. **Run the script** — Parallel pipeline:
-    - Parse video metadata via Playwright browser interception (concurrency 1 by default for stability)
-    - Download MP4 via CDN URL into `<output>/.temp` cache (concurrency 1 by default for stability). For Bilibili DASH format, downloads video and audio streams separately and merges with ffmpeg.
+    - Parse video metadata via Playwright browser interception, page state, and runtime media fallbacks (concurrency 1 by default for stability)
+    - Download MP4 via CDN URL into `<output>/.temp` cache (concurrency 1 by default for stability). For Bilibili and Douyin separated media streams, downloads video and audio separately and merges with ffmpeg.
+    - Validate the final MP4 has both video and audio tracks before treating the item as completed
     - Extract audio with ffmpeg → transcribe with local faster-whisper (model reused, conservative CUDA default)
     - Convert Traditional Chinese to Simplified via OpenCC
     - Write MP4 (by default), structured JSON, and plain text transcript into each video result folder
@@ -233,8 +234,11 @@ By default, the final MP4 is copied into the per-video folder. The `.temp` direc
 ## Important notes
 
 - Supports Douyin (抖音), Bilibili (B站), and Xiaohongshu (小红书) platforms
-- Bilibili high-quality videos use DASH format (separate video/audio streams) — automatically merged with ffmpeg
-- Xiaohongshu: video notes only; image/text notes are not supported
+- Bilibili high-quality videos use DASH format (separate video/audio streams) — automatically merged with ffmpeg; if page interception misses `playurl`, the parser falls back to page `__playinfo__` and direct `x/player/playurl` requests.
+- Douyin may expose merged MP4 or separated `media-video-*` / `media-audio-*` streams; audio-only resources are never treated as completed videos.
+- Xiaohongshu: video notes only; image/text notes are not supported. Login overlays may still expose public video-note state, so parser checks the target note state and media responses before failing.
+- Downloaded or merged MP4 files must contain both video and audio tracks; otherwise the item is retried instead of producing a misleading success.
+- Short share links can expire or redirect to unrelated feed pages; if that happens, use the canonical platform URL when available.
 - First Whisper model use downloads ~500 MB — this is normal, not a hang.
 - Whisper model is loaded once per process and reused across all items.
 - **Transcription optimization**: beam_size=5 (beam search) and VAD disabled for higher accuracy. Speed is ~2-3x slower than greedy decoding but significantly reduces hallucinations and errors.

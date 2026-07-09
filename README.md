@@ -67,12 +67,12 @@ In Claude Code, paste a public video link and ask for download or transcript ext
 
 ## Supported Platforms
 
-| Platform       |       Status | Notes                                      |
-| -------------- | -----------: | ------------------------------------------ |
-| Douyin         | ✅ Supported | Public video links                         |
-| Bilibili       | ✅ Supported | Public videos, DASH merge supported        |
-| Xiaohongshu    | ✅ Supported | Video notes only                           |
-| More platforms |      Planned | The platform adapter layer can be extended |
+| Platform       |       Status | Notes                                                       |
+| -------------- | -----------: | ----------------------------------------------------------- |
+| Douyin         | ✅ Supported | Public video links; merged and separated media streams      |
+| Bilibili       | ✅ Supported | Public videos, DASH merge and playurl fallbacks supported   |
+| Xiaohongshu    | ✅ Supported | Public video notes; target note-state and media fallbacks   |
+| More platforms |      Planned | The platform adapter layer can be extended                  |
 
 ## Features
 
@@ -80,7 +80,9 @@ In Claude Code, paste a public video link and ask for download or transcript ext
 - **Browser-based extraction** — captures media URLs via Playwright, without yt-dlp or third-party parsing APIs.
 - **Local transcription** — uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) to generate transcripts without cloud APIs; optional Traditional→Simplified conversion via [OpenCC](https://github.com/BYVoid/OpenCC).
 - **Structured output** — saves metadata, transcript text, and JSON output locally.
-- **Bilibili DASH support** — downloads and merges separated video/audio streams with ffmpeg.
+- **Separated stream support** — downloads and merges separated video/audio streams with ffmpeg for Bilibili and Douyin when needed.
+- **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Xiaohongshu reliability.
+- **Media track validation** — treats an item as completed only after the final MP4 has both video and audio tracks.
 - **Resumable workflow** — reruns can skip completed downloads and existing transcripts; failed items auto-retry with exponential backoff.
 - **Agent Skill ready** — can be installed as a Claude/Codex-style assistant skill.
 
@@ -334,7 +336,9 @@ Additional practical limits:
 - CPU transcription: ~12 seconds per minute of audio (GPU: ~0.4 seconds)
 - Some videos may require verification challenges — use `--headed` mode
 - Bilibili high-quality videos require ffmpeg for DASH stream merging
-- Xiaohongshu image/text notes are not supported (video notes only)
+- Douyin may return separated video/audio streams; audio-only resources are rejected instead of being saved as videos
+- Xiaohongshu image/text notes are not supported (video notes only); public video notes can still work when a login overlay is shown
+- Short share links may expire or redirect to unrelated feed pages; use canonical URLs when available
 - Transcription is speech-only; on-screen text is not captured
 
 ## Reference Docs

@@ -1,30 +1,122 @@
-# Douyin, Bilibili & Xiaohongshu Batch Download & Transcribe
+<p align="center">
+  <img src="docs/assets/banner.png" alt="Video Batch Download" width="100%" />
+</p>
 
-> [🇺🇸 English](README.md) | [🇨🇳 中文](README_zh.md)
+<h1 align="center">Video Batch Download</h1>
 
-Download public videos from Douyin, Bilibili and Xiaohongshu, extract transcripts — fully locally, no cloud APIs.
+<p align="center">
+  <b>Download videos and extract transcripts locally.</b>
+</p>
+
+<p align="center">
+  Turn public video links into local video files, metadata, JSON, and TXT transcripts.
+</p>
+
+<p align="center">
+  Currently supports public videos from Douyin, Bilibili, and Xiaohongshu.
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README_zh.md">中文</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Node.js-20%2B-brightgreen" alt="Node.js 20+" />
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/Local--first-No%20Cloud%20API-7c3aed" alt="Local-first" />
+  <img src="https://img.shields.io/badge/License-MIT-black" alt="MIT License" />
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#use-as-an-agent-skill">Agent Skill</a> ·
+  <a href="#supported-platforms">Supported Platforms</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#output">Output</a> ·
+  <a href="#cli-options">CLI Options</a> ·
+  <a href="#scope-and-limitations">Limitations</a>
+</p>
+
+## Quick Start
+
+```bash
+git clone https://github.com/ljb1020/video-batch-download.git
+cd video-batch-download
+
+npm install
+node scripts/setup.mjs
+
+pip install -U faster-whisper opencc
+```
+
+Also requires [ffmpeg](https://ffmpeg.org/) on `PATH`.
+
+Download and transcribe one video:
+
+```bash
+node scripts/download.mjs "https://v.douyin.com/xxxxx"
+```
+
+Skip transcription (download video and metadata only):
+
+```bash
+node scripts/download.mjs "https://v.douyin.com/xxxxx" --no-transcribe
+```
+
+## Use as an Agent Skill
+
+Tell your AI assistant:
+
+> Install this skill: https://github.com/ljb1020/video-batch-download
+
+Or install manually:
+
+```bash
+# Linux/macOS
+git clone https://github.com/ljb1020/video-batch-download.git ~/.claude/skills/video-batch-download
+
+# Windows
+git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.claude\skills\video-batch-download
+```
+
+In Claude Code, paste a public video link and ask for download or transcript extraction:
+
+> "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"  
+> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"  
+> "下载这个小红书视频 http://xhslink.com/xxxxx"
+
+## Supported Platforms
+
+| Platform | Status | Notes |
+|---|---:|---|
+| Douyin | ✅ Supported | Public video links |
+| Bilibili | ✅ Supported | Public videos, DASH merge supported |
+| Xiaohongshu | ✅ Supported | Video notes only |
+| More platforms | Planned | The platform adapter layer can be extended |
 
 ## Features
 
-- Browser-based video URL interception via Playwright (no yt-dlp, no third-party APIs)
-- Supports **Douyin (抖音)**, **Bilibili (B站)** and **Xiaohongshu (小红书)** platforms
-- Bilibili DASH format support — automatically downloads and merges separate video/audio streams
-- Local speech-to-text via [faster-whisper](https://github.com/SYSTRAN/faster-whisper) — no API key, no network, fully free
-- Automatic Traditional → Simplified Chinese conversion via [OpenCC](https://github.com/BYVoid/OpenCC)
-- Structured JSON metadata (title, author, post time, stats)
-- Parallel parsing with conservative defaults — media downloads and transcription run serially by default for stability
-- Failed items auto-retry with exponential backoff
-- Resumable: rerun with the same output directory to reuse `download-state.json`, skip completed downloads, and reuse completed transcript outputs when the JSON/TXT files still exist
-- Real-time progress output
+- **Multi-platform video download** — supports public videos from currently integrated platforms.
+- **Browser-based extraction** — captures media URLs via Playwright, without yt-dlp or third-party parsing APIs.
+- **Local transcription** — uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) to generate transcripts without cloud APIs; optional Traditional→Simplified conversion via [OpenCC](https://github.com/BYVoid/OpenCC).
+- **Structured output** — saves metadata, transcript text, and JSON output locally.
+- **Bilibili DASH support** — downloads and merges separated video/audio streams with ffmpeg.
+- **Resumable workflow** — reruns can skip completed downloads and existing transcripts; failed items auto-retry with exponential backoff.
+- **Agent Skill ready** — can be installed as a Claude/Codex-style assistant skill.
 
 ## Prerequisites
 
 - Node.js 20+
 - Python 3.10+
-- [ffmpeg](https://ffmpeg.org/) (must be on PATH)
+- [ffmpeg](https://ffmpeg.org/) (must be on `PATH`)
 
-The default transcription profile is `medium + cuda + float16 + zh`, which works best on machines with a usable NVIDIA CUDA environment.
-If CUDA is unavailable or default transcription startup fails, run with: `--device cpu --compute-type int8 --model small`
+The default transcription profile is `medium + cuda + float16 + zh`, which works best on machines with a usable NVIDIA CUDA environment.  
+If CUDA is unavailable or default transcription startup fails, run with:
+
+```bash
+--device cpu --compute-type int8 --model small
+```
 
 ## Installation
 
@@ -43,83 +135,81 @@ node scripts/setup.mjs
 pip install -U faster-whisper opencc
 ```
 
-### 3. As an Agent Skill
-
-**Option A: Tell your AI assistant (easiest)**
-
-> "Install this skill: https://github.com/ljb1020/video-batch-download"
-
-**Option B: git clone**
-
-```bash
-# Linux/macOS
-git clone https://github.com/ljb1020/video-batch-download.git ~/.claude/skills/video-batch-download
-
-# Windows
-git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.claude\skills\video-batch-download
-```
+If you only need download and metadata, you can skip Python dependencies and always pass `--no-transcribe`.
 
 ## Usage
 
-### CLI
+### Download one video
 
 ```bash
-# Single URL (Douyin, Bilibili, or Xiaohongshu)
 node scripts/download.mjs "https://v.douyin.com/xxxxx"
 node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
 node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
+```
 
-# Multiple URLs (mixed platforms supported)
+### Download multiple videos
+
+```bash
+# Mixed platforms are supported
 node scripts/download.mjs "url1" "url2" "url3"
 
 # Custom output directory
 node scripts/download.mjs "url" --output ./my_output
+```
 
-# From a text file
-node scripts/download.mjs --input links.txt --output ./douyin_results
+### Read links from a file
 
-# Skip transcription (download metadata only)
+```bash
+node scripts/download.mjs --input links.txt --output ./video_results
+```
+
+### Skip transcription
+
+```bash
 node scripts/download.mjs "url" --no-transcribe
+```
 
-# GPU acceleration with high accuracy
+### Use GPU transcription
+
+```bash
 node scripts/download.mjs "url" --device cuda --compute-type float16 --model large-v3
 ```
 
-### In Claude Code
+### CPU fallback
 
-Paste Douyin, Bilibili or Xiaohongshu links and ask for transcript extraction:
-
-> "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
-> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
-> "下载这个小红书视频 http://xhslink.com/xxxxx"
-
-## How it works
-
-```
-Input URL(s)
-    ↓
-Playwright browser → parse video metadata + intercept CDN URL
-    ↓
-┌─ Worker 1: download MP4 ──┐
-├─ Worker 2: download MP4 ──┤  (serial by default, configurable)
-└─ Worker 3: download MP4 ──┘
-    ↓
-(Bilibili DASH: merge video+audio streams with ffmpeg)
-    ↓
-ffmpeg extract audio → 16kHz mono WAV
-    ↓
-faster-whisper speech-to-text (model reused, conservative CUDA default)
-    ↓
-OpenCC Traditional → Simplified Chinese
-    ↓
-Output: JSON + TXT
+```bash
+node scripts/download.mjs "url" --device cpu --compute-type int8 --model small
 ```
 
-## Output format
+### Visible browser for verification challenges
+
+```bash
+node scripts/download.mjs --input links.txt --output ./downloads --headed
+```
+
+## How It Works
+
+```txt
+Video URL(s)
+    ↓
+Playwright opens the page and detects media URLs
+    ↓
+Download video / audio streams
+    ↓
+Merge DASH streams with ffmpeg when needed
+    ↓
+Extract audio and transcribe with faster-whisper
+    ↓
+Save metadata, JSON, and TXT transcript locally
+```
+
+Parse and download concurrency default to `1` for stability and can be raised with CLI flags. The Whisper model is loaded once per process and reused across items.
+
+## Output
 
 Each video gets its own subdirectory:
 
-```
+```txt
 video_results/
   ├── 2026_06_24_21-30-00_抖音_张三_740123456789/
   │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.json
@@ -128,6 +218,8 @@ video_results/
   │   └── ...
   └── download-summary.json
 ```
+
+Rerun with the same output directory to resume from `download-state.json`.
 
 ### JSON format
 
@@ -171,13 +263,23 @@ video_results/
     "language_probability": 0.98,
     "device": "cuda",
     "compute_type": "float16"
+  },
+  "media_info": {
+    "width": 1080,
+    "height": 1920,
+    "resolution": "1080x1920",
+    "bitrate_kbps": 2500,
+    "duration_secs": 125.5,
+    "codec": "h264",
+    "format": "mov,mp4,m4a,3gp,3g2,mj2"
   }
 }
 ```
 
 ## CLI Options
 
-### Download options
+<details>
+<summary>Download options</summary>
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -192,7 +294,10 @@ video_results/
 | `--headed` | off | Show browser window |
 | `--storage-state <file>` | — | Playwright storage-state JSON |
 
-### Transcription options
+</details>
+
+<details>
+<summary>Transcription options</summary>
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -205,32 +310,29 @@ video_results/
 | `--ffmpeg-path <path>` | auto | Path to ffmpeg executable |
 | `--transcribe-timeout <secs>` | `600` | Timeout per transcription |
 
-## What this tool does
+</details>
 
-- Downloads public Douyin videos via browser-based CDN URL interception
-- Downloads public Bilibili videos (including DASH format with separate video/audio streams)
-- Downloads public Xiaohongshu video notes
-- Extracts metadata (title, author, post time, stats) from platform APIs
-- Transcribes audio to text using local faster-whisper
-- Converts Traditional Chinese output to Simplified Chinese
-- Saves structured JSON and plain text transcript locally
+## Scope and Limitations
 
-## What this tool does NOT do
+This tool is designed for public video content and local processing. It downloads public videos, extracts metadata, and optionally transcribes speech locally.
 
-- Does not send any data to external services or APIs
-- Does not upload your media or transcripts
-- Does not process private or login-required content
-- Does not perform OCR on on-screen text (speech transcription only)
+It does not:
 
-## Limitations
+- upload media or transcripts to external services
+- process private or login-required content
+- bypass platform access controls
+- perform OCR on visual text
+
+Additional practical limits:
 
 - First Whisper model use downloads ~500 MB — this is normal, not a hang
 - CPU transcription: ~12 seconds per minute of audio (GPU: ~0.4 seconds)
 - Some videos may require verification challenges — use `--headed` mode
 - Bilibili high-quality videos require ffmpeg for DASH stream merging
 - Xiaohongshu image/text notes are not supported (video notes only)
+- Transcription is speech-only; on-screen text is not captured
 
-## Reference docs
+## Reference Docs
 
 - [Architecture and design](references/architecture.md)
 - [Platform development guide](references/platform-development.md)

@@ -1,30 +1,122 @@
-# 抖音、B站 & 小红书 批量下载与转写
+<p align="center">
+  <img src="docs/assets/banner.png" alt="Video Batch Download" width="100%" />
+</p>
 
-> 🇺🇸 [English](README.md) | 🇨🇳 中文
+<h1 align="center">Video Batch Download</h1>
 
-批量下载抖音、B站和小红书公开视频并提取文案 —— 完全本地化，无需云 API。
+<p align="center">
+  <b>下载视频，并在本地提取转写文案。</b>
+</p>
+
+<p align="center">
+  输入公开视频链接，自动保存视频、元数据、JSON 和 TXT 文案。
+</p>
+
+<p align="center">
+  当前支持抖音、B站和小红书的公开视频。
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="README_zh.md">中文</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Node.js-20%2B-brightgreen" alt="Node.js 20+" />
+  <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/Local--first-No%20Cloud%20API-7c3aed" alt="Local-first" />
+  <img src="https://img.shields.io/badge/License-MIT-black" alt="MIT License" />
+</p>
+
+<p align="center">
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#作为-agent-skill-使用">Agent Skill</a> ·
+  <a href="#支持平台">支持平台</a> ·
+  <a href="#使用方法">使用方法</a> ·
+  <a href="#输出结果">输出结果</a> ·
+  <a href="#命令行参数">命令行参数</a> ·
+  <a href="#适用范围与限制">限制说明</a>
+</p>
+
+## 快速开始
+
+```bash
+git clone https://github.com/ljb1020/video-batch-download.git
+cd video-batch-download
+
+npm install
+node scripts/setup.mjs
+
+pip install -U faster-whisper opencc
+```
+
+同时需要系统已安装 [ffmpeg](https://ffmpeg.org/)，并确保可在 `PATH` 中调用。
+
+下载并转写一个视频：
+
+```bash
+node scripts/download.mjs "https://v.douyin.com/xxxxx"
+```
+
+跳过转写，只下载视频和元数据：
+
+```bash
+node scripts/download.mjs "https://v.douyin.com/xxxxx" --no-transcribe
+```
+
+## 作为 Agent Skill 使用
+
+直接对你的 AI 助手说：
+
+> 帮我安装这个 skill：https://github.com/ljb1020/video-batch-download
+
+或者手动安装：
+
+```bash
+# Linux/macOS
+git clone https://github.com/ljb1020/video-batch-download.git ~/.claude/skills/video-batch-download
+
+# Windows
+git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.claude\skills\video-batch-download
+```
+
+在 Claude Code 中，直接粘贴公开视频链接并要求下载或提取文案：
+
+> "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"  
+> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"  
+> "下载这个小红书视频 http://xhslink.com/xxxxx"
+
+## 支持平台
+
+| 平台 | 状态 | 说明 |
+|---|---:|---|
+| 抖音 | ✅ 已支持 | 公开视频链接 |
+| B站 / Bilibili | ✅ 已支持 | 支持公开视频，支持 DASH 合并 |
+| 小红书 | ✅ 已支持 | 目前支持视频笔记 |
+| 更多平台 | 计划中 | 后续可通过平台适配层扩展 |
 
 ## 功能特性
 
-- 通过 Playwright 浏览器拦截获取视频 CDN URL（不依赖 yt-dlp 或第三方解析 API）
-- 支持 **抖音**、**B站（Bilibili）** 和 **小红书** 三大平台
-- B站 DASH 格式支持 —— 自动下载并合并分离的视频/音频流
-- 通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 实现本地语音转文字 —— 无需 API Key，无需联网，完全免费
-- 通过 [OpenCC](https://github.com/BYVoid/OpenCC) 自动繁→简中文转换
-- 结构化 JSON 元数据（标题、作者、发布时间、播放/点赞/评论/分享/收藏数）
-- 保守并行处理 —— 解析可并发，媒体下载与转写默认串行以提高稳定性
-- 失败自动重试（指数退避）
-- 断点续传：使用同一输出目录重跑时会复用 `download-state.json`，跳过已下载项；若 JSON/TXT 转写结果仍在，也会跳过已完成转写
-- 实时进度输出
+- **多平台视频下载**：支持已接入平台的公开视频链接。
+- **浏览器拦截提取**：通过 Playwright 捕获媒体地址，不依赖 yt-dlp 或第三方解析 API。
+- **本地语音转写**：通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 在本地生成文案，不依赖云 API；可选 [OpenCC](https://github.com/BYVoid/OpenCC) 繁→简转换。
+- **结构化输出**：保存视频元数据、TXT 文案和 JSON 结果。
+- **B站 DASH 支持**：自动下载并通过 ffmpeg 合并分离的视频/音频流。
+- **断点续跑**：重复运行时可跳过已完成下载和已有转写结果；失败项支持指数退避重试。
+- **Agent Skill 可用**：可作为 Claude / Codex 类助手的 Skill 使用。
 
 ## 前置条件
 
 - Node.js 20+
 - Python 3.10+
-- [ffmpeg](https://ffmpeg.org/)（需要在 PATH 中）
+- [ffmpeg](https://ffmpeg.org/)（需要在 `PATH` 中）
 
-默认转写配置为 `medium + cuda + float16 + zh`，更适合具备可用 NVIDIA CUDA 环境的电脑。
-如果你的电脑不支持 CUDA，或默认转写启动失败，建议显式改用：`--device cpu --compute-type int8 --model small`
+默认转写配置为 `medium + cuda + float16 + zh`，更适合具备可用 NVIDIA CUDA 环境的电脑。  
+如果你的电脑不支持 CUDA，或默认转写启动失败，建议显式改用：
+
+```bash
+--device cpu --compute-type int8 --model small
+```
 
 ## 安装
 
@@ -35,7 +127,7 @@ npm install
 node scripts/setup.mjs
 ```
 
-`setup.mjs` 验证 Playwright 环境，仅在需要时安装 Chromium。
+`setup.mjs` 会验证 Playwright 环境，并仅在需要时安装 Chromium。
 
 ### 2. 安装 Python 依赖（用于转写）
 
@@ -43,83 +135,81 @@ node scripts/setup.mjs
 pip install -U faster-whisper opencc
 ```
 
-### 3. 作为 Agent Skill 使用
-
-**方式一：直接跟 AI 说（最省事）**
-
-> "帮我安装这个 skill：https://github.com/ljb1020/video-batch-download"
-
-**方式二：git clone**
-
-```bash
-# Linux/macOS
-git clone https://github.com/ljb1020/video-batch-download.git ~/.claude/skills/video-batch-download
-
-# Windows
-git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.claude\skills\video-batch-download
-```
+如果只需要下载视频和元数据，可以不装 Python 依赖，并始终加上 `--no-transcribe`。
 
 ## 使用方法
 
-### 命令行（CLI）
+### 下载单个视频
 
 ```bash
-# 单个链接（抖音、B站或小红书）
 node scripts/download.mjs "https://v.douyin.com/xxxxx"
 node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
 node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
+```
 
-# 多个链接（支持混合平台）
+### 批量下载多个视频
+
+```bash
+# 支持混合平台
 node scripts/download.mjs "url1" "url2" "url3"
 
 # 自定义输出目录
 node scripts/download.mjs "url" --output ./my_output
+```
 
-# 从文本文件读取链接
+### 从文本文件读取链接
+
+```bash
 node scripts/download.mjs --input links.txt --output ./video_results
+```
 
-# 跳过转写（仅下载元数据）
+### 跳过转写
+
+```bash
 node scripts/download.mjs "url" --no-transcribe
+```
 
-# GPU 加速 + 高精度模型
+### 使用 GPU 转写
+
+```bash
 node scripts/download.mjs "url" --device cuda --compute-type float16 --model large-v3
 ```
 
-### 在 Claude Code 中使用
+### CPU 兼容模式
 
-直接粘贴抖音、B站或小红书链接并要求提取文案：
-
-> "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
-> "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
-> "下载这个小红书视频 http://xhslink.com/xxxxx"
-
-## 工作原理
-
+```bash
+node scripts/download.mjs "url" --device cpu --compute-type int8 --model small
 ```
-输入 URL(s)
-    ↓
-Playwright 浏览器解析 → 提取视频元数据 + 拦截 CDN URL
-    ↓
-┌─ Worker 1: 下载 MP4 ──┐
-├─ Worker 2: 下载 MP4 ──┤  （默认串行，可配置）
-└─ Worker 3: 下载 MP4 ──┘
-    ↓
-（B站 DASH: ffmpeg 合并视频+音频流）
-    ↓
-ffmpeg 提取音频 → 16kHz mono WAV
-    ↓
-faster-whisper 语音转文字（模型复用，CUDA 默认保守配置）
-    ↓
-OpenCC 繁→简中文转换
-    ↓
-输出：JSON + TXT
+
+### 有头模式处理验证码
+
+```bash
+node scripts/download.mjs --input links.txt --output ./downloads --headed
 ```
+
+## 工作流程
+
+```txt
+视频链接
+    ↓
+Playwright 打开页面并捕获媒体地址
+    ↓
+下载视频 / 音频流
+    ↓
+必要时通过 ffmpeg 合并 DASH 流
+    ↓
+提取音频并通过 faster-whisper 本地转写
+    ↓
+保存元数据、JSON 和 TXT 文案
+```
+
+解析与下载默认并发为 `1`，更稳定，可通过 CLI 参数提高。Whisper 模型在进程内加载一次并复用。
 
 ## 输出结果
 
 每个视频一个独立目录：
 
-```
+```txt
 video_results/
   ├── 2026_06_24_21-30-00_抖音_张三_740123456789/
   │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.json
@@ -128,6 +218,8 @@ video_results/
   │   └── ...
   └── download-summary.json
 ```
+
+使用同一输出目录重跑时，会复用 `download-state.json` 做断点续传。
 
 ### JSON 格式
 
@@ -171,13 +263,23 @@ video_results/
     "language_probability": 0.98,
     "device": "cuda",
     "compute_type": "float16"
+  },
+  "media_info": {
+    "width": 1080,
+    "height": 1920,
+    "resolution": "1080x1920",
+    "bitrate_kbps": 2500,
+    "duration_secs": 125.5,
+    "codec": "h264",
+    "format": "mov,mp4,m4a,3gp,3g2,mj2"
   }
 }
 ```
 
-## CLI 参数
+## 命令行参数
 
-### 下载参数
+<details>
+<summary>下载参数</summary>
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
@@ -192,7 +294,10 @@ video_results/
 | `--headed` | 关闭 | 显示浏览器窗口 |
 | `--storage-state <file>` | — | Playwright storage-state JSON |
 
-### 转写参数
+</details>
+
+<details>
+<summary>转写参数</summary>
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
@@ -205,30 +310,27 @@ video_results/
 | `--ffmpeg-path <path>` | 自动 | ffmpeg 可执行文件路径 |
 | `--transcribe-timeout <secs>` | `600` | 单次转写超时 |
 
-## 本工具的特性
+</details>
 
-- 支持抖音、B站和小红书三大平台的视频下载
-- 抖音：拦截 detail API 获取元数据，拦截 CDN 获取视频 URL
-- B站：拦截 view/playurl API 获取元数据和流媒体 URL，自动处理 DASH 格式
-- 小红书：拦截 feed/note API 获取元数据，拦截 xhscdn.com CDN 获取视频 URL
-- 使用 faster-whisper（本地离线）将音频转为文字
-- 将繁体中文输出转换为简体中文
-- 本地保存结构化 JSON 和纯文本转写
+## 适用范围与限制
 
-## 本工具不做的事
+本工具面向公开视频内容和本地处理流程。它会下载公开视频、提取元数据，并可选地在本地进行语音转写。
 
-- 不会向外部服务或 API 发送任何数据
-- 不会上传你的媒体或转写内容
-- 不会处理私有或需要登录的内容
-- 不会进行屏幕文字 OCR（仅限语音转写）
+它不会：
 
-## 限制说明
+- 上传视频或转写结果到外部服务
+- 处理私密内容或强登录内容
+- 绕过平台访问控制
+- 对画面文字做 OCR
+
+其他实际限制：
 
 - 首次使用 Whisper 模型会下载约 500 MB —— 这是正常现象，不是卡住
 - CPU 转写：1 分钟音频约 12 秒（GPU：约 0.4 秒）
 - 部分视频可能触发验证码 —— 使用 `--headed` 模式
 - B站高画质视频需要 ffmpeg 合并 DASH 流
 - 小红书仅支持视频笔记，不支持图文笔记
+- 转写仅限语音内容，不包含屏幕文字识别
 
 ## 参考文档
 

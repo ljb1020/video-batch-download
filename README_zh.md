@@ -13,7 +13,7 @@
     <img src="https://img.shields.io/static/v1?label=&message=English&color=111827&style=for-the-badge" alt="English" height="24" />
   </a>
   <a href="README_zh.md">
-    <img src="https://img.shields.io/static/v1?label=&message=中文&color=111827&style=for-the-badge" alt="中文" height="24" />
+    <img src="https://img.shields.io/static/v1?label=&message=%E4%B8%AD%E6%96%87&color=111827&style=for-the-badge" alt="中文" height="24" />
   </a>
 </p>
 

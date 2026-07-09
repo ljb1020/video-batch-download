@@ -5,20 +5,16 @@
 <h1 align="center">Video Batch Download</h1>
 
 <p align="center">
-  <b>Download videos and extract transcripts locally.</b>
+  <b>Download public videos into transcripts and structured data.</b>
 </p>
 
 <p align="center">
-  Turn public video links into local video files, metadata, JSON, and TXT transcripts.
-</p>
-
-<p align="center">
-  Currently supports public videos from Douyin, Bilibili, and Xiaohongshu.
-</p>
-
-<p align="center">
-  <a href="README.md">English</a> ·
-  <a href="README_zh.md">中文</a>
+  <a href="README.md">
+    <img src="https://img.shields.io/static/v1?label=&message=English&color=111827&style=for-the-badge" alt="English" height="24" />
+  </a>
+  <a href="README_zh.md">
+    <img src="https://img.shields.io/static/v1?label=&message=中文&color=111827&style=for-the-badge" alt="中文" height="24" />
+  </a>
 </p>
 
 <p align="center">
@@ -26,16 +22,6 @@
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python 3.10+" />
   <img src="https://img.shields.io/badge/Local--first-No%20Cloud%20API-7c3aed" alt="Local-first" />
   <img src="https://img.shields.io/badge/License-MIT-black" alt="MIT License" />
-</p>
-
-<p align="center">
-  <a href="#quick-start">Quick Start</a> ·
-  <a href="#use-as-an-agent-skill">Agent Skill</a> ·
-  <a href="#supported-platforms">Supported Platforms</a> ·
-  <a href="#usage">Usage</a> ·
-  <a href="#output">Output</a> ·
-  <a href="#cli-options">CLI Options</a> ·
-  <a href="#scope-and-limitations">Limitations</a>
 </p>
 
 ## Quick Start
@@ -88,12 +74,12 @@ In Claude Code, paste a public video link and ask for download or transcript ext
 
 ## Supported Platforms
 
-| Platform | Status | Notes |
-|---|---:|---|
-| Douyin | ✅ Supported | Public video links |
-| Bilibili | ✅ Supported | Public videos, DASH merge supported |
-| Xiaohongshu | ✅ Supported | Video notes only |
-| More platforms | Planned | The platform adapter layer can be extended |
+| Platform       |       Status | Notes                                      |
+| -------------- | -----------: | ------------------------------------------ |
+| Douyin         | ✅ Supported | Public video links                         |
+| Bilibili       | ✅ Supported | Public videos, DASH merge supported        |
+| Xiaohongshu    | ✅ Supported | Video notes only                           |
+| More platforms |      Planned | The platform adapter layer can be extended |
 
 ## Features
 
@@ -225,54 +211,54 @@ Rerun with the same output directory to resume from `download-state.json`.
 
 ```json
 {
-  "status": "success",
-  "source_url": "https://v.douyin.com/xxxxx",
-  "canonical_url": "https://www.douyin.com/video/740123456789",
-  "video_id": "740123456789",
-  "platform": "抖音",
-  "content_type": "video",
-  "title": "今天给大家分享一个技巧",
-  "description": "这个视频教大家怎么用 AI 提高效率 #AI #效率",
-  "author": {
-    "nickname": "张三",
-    "uid": "MS4wLjABAAAA...",
-    "url": "https://www.douyin.com/user/xxx"
-  },
-  "post_time": "2026-06-20 14:30:00",
-  "duration": 125,
-  "stats": {
-    "play_count": 1000,
-    "digg_count": 1234,
-    "comment_count": 56,
-    "share_count": 78,
-    "collect_count": 90
-  },
-  "transcript": "大家好，今天给大家分享一个非常好用的AI工具...",
-  "segments": [
-    {
-      "start": 0.0,
-      "end": 2.5,
-      "text": "大家好，今天...",
-      "simplified": true
-    }
-  ],
-  "transcript_source": "faster-whisper",
-  "transcription": {
-    "model": "medium",
-    "language": "zh",
-    "language_probability": 0.98,
-    "device": "cuda",
-    "compute_type": "float16"
-  },
-  "media_info": {
-    "width": 1080,
-    "height": 1920,
-    "resolution": "1080x1920",
-    "bitrate_kbps": 2500,
-    "duration_secs": 125.5,
-    "codec": "h264",
-    "format": "mov,mp4,m4a,3gp,3g2,mj2"
-  }
+	"status": "success",
+	"source_url": "https://v.douyin.com/xxxxx",
+	"canonical_url": "https://www.douyin.com/video/740123456789",
+	"video_id": "740123456789",
+	"platform": "抖音",
+	"content_type": "video",
+	"title": "今天给大家分享一个技巧",
+	"description": "这个视频教大家怎么用 AI 提高效率 #AI #效率",
+	"author": {
+		"nickname": "张三",
+		"uid": "MS4wLjABAAAA...",
+		"url": "https://www.douyin.com/user/xxx"
+	},
+	"post_time": "2026-06-20 14:30:00",
+	"duration": 125,
+	"stats": {
+		"play_count": 1000,
+		"digg_count": 1234,
+		"comment_count": 56,
+		"share_count": 78,
+		"collect_count": 90
+	},
+	"transcript": "大家好，今天给大家分享一个非常好用的AI工具...",
+	"segments": [
+		{
+			"start": 0.0,
+			"end": 2.5,
+			"text": "大家好，今天...",
+			"simplified": true
+		}
+	],
+	"transcript_source": "faster-whisper",
+	"transcription": {
+		"model": "medium",
+		"language": "zh",
+		"language_probability": 0.98,
+		"device": "cuda",
+		"compute_type": "float16"
+	},
+	"media_info": {
+		"width": 1080,
+		"height": 1920,
+		"resolution": "1080x1920",
+		"bitrate_kbps": 2500,
+		"duration_secs": 125.5,
+		"codec": "h264",
+		"format": "mov,mp4,m4a,3gp,3g2,mj2"
+	}
 }
 ```
 
@@ -281,34 +267,34 @@ Rerun with the same output directory to resume from `download-state.json`.
 <details>
 <summary>Download options</summary>
 
-| Parameter | Default | Description |
-|---|---|---|
-| `--input <file>` | — | Read URLs from a UTF-8 text file |
-| `--output <dir>` | `./video_results` | Output directory |
-| `--parse-concurrency <n>` | `1` | Concurrent browser parsers |
-| `--download-concurrency <n>` | `1` | Concurrent media downloads (serial by default for stability) |
-| `--max-attempts <n>` | `10` | Retry attempts per item (0 = infinite) |
-| `--page-timeout <secs>` | `45` | Page navigation timeout |
-| `--media-wait <secs>` | `25` | Wait for media response after navigation |
-| `--download-timeout <secs>` | `900` | Total download timeout per file |
-| `--headed` | off | Show browser window |
-| `--storage-state <file>` | — | Playwright storage-state JSON |
+| Parameter                    | Default           | Description                                                  |
+| ---------------------------- | ----------------- | ------------------------------------------------------------ |
+| `--input <file>`             | —                 | Read URLs from a UTF-8 text file                             |
+| `--output <dir>`             | `./video_results` | Output directory                                             |
+| `--parse-concurrency <n>`    | `1`               | Concurrent browser parsers                                   |
+| `--download-concurrency <n>` | `1`               | Concurrent media downloads (serial by default for stability) |
+| `--max-attempts <n>`         | `10`              | Retry attempts per item (0 = infinite)                       |
+| `--page-timeout <secs>`      | `45`              | Page navigation timeout                                      |
+| `--media-wait <secs>`        | `25`              | Wait for media response after navigation                     |
+| `--download-timeout <secs>`  | `900`             | Total download timeout per file                              |
+| `--headed`                   | off               | Show browser window                                          |
+| `--storage-state <file>`     | —                 | Playwright storage-state JSON                                |
 
 </details>
 
 <details>
 <summary>Transcription options</summary>
 
-| Parameter | Default | Description |
-|---|---|---|
-| `--no-transcribe` | off | Skip Whisper transcription |
-| `--model <name>` | `medium` | Whisper model (`small`, `medium`, `large-v3`) |
-| `--language <code>` | `zh` | Language code, `auto` = auto-detect |
-| `--device <cpu\|cuda>` | `cuda` | Transcription device |
-| `--compute-type <type>` | `float16` | Precision (`int8`, `float16`, `float32`) |
-| `--no-simplify` | off | Skip Traditional→Simplified conversion |
-| `--ffmpeg-path <path>` | auto | Path to ffmpeg executable |
-| `--transcribe-timeout <secs>` | `600` | Timeout per transcription |
+| Parameter                     | Default   | Description                                   |
+| ----------------------------- | --------- | --------------------------------------------- |
+| `--no-transcribe`             | off       | Skip Whisper transcription                    |
+| `--model <name>`              | `medium`  | Whisper model (`small`, `medium`, `large-v3`) |
+| `--language <code>`           | `zh`      | Language code, `auto` = auto-detect           |
+| `--device <cpu\|cuda>`        | `cuda`    | Transcription device                          |
+| `--compute-type <type>`       | `float16` | Precision (`int8`, `float16`, `float32`)      |
+| `--no-simplify`               | off       | Skip Traditional→Simplified conversion        |
+| `--ffmpeg-path <path>`        | auto      | Path to ffmpeg executable                     |
+| `--transcribe-timeout <secs>` | `600`     | Timeout per transcription                     |
 
 </details>
 

@@ -5,20 +5,16 @@
 <h1 align="center">Video Batch Download</h1>
 
 <p align="center">
-  <b>下载视频，并在本地提取转写文案。</b>
+  <b>公开视频一键下载，本地生成文案和结构化数据。</b>
 </p>
 
 <p align="center">
-  输入公开视频链接，自动保存视频、元数据、JSON 和 TXT 文案。
-</p>
-
-<p align="center">
-  当前支持抖音、B站和小红书的公开视频。
-</p>
-
-<p align="center">
-  <a href="README.md">English</a> ·
-  <a href="README_zh.md">中文</a>
+  <a href="README.md">
+    <img src="https://img.shields.io/static/v1?label=&message=English&color=111827&style=for-the-badge" alt="English" height="24" />
+  </a>
+  <a href="README_zh.md">
+    <img src="https://img.shields.io/static/v1?label=&message=中文&color=111827&style=for-the-badge" alt="中文" height="24" />
+  </a>
 </p>
 
 <p align="center">
@@ -26,16 +22,6 @@
   <img src="https://img.shields.io/badge/Python-3.10%2B-blue" alt="Python 3.10+" />
   <img src="https://img.shields.io/badge/Local--first-No%20Cloud%20API-7c3aed" alt="Local-first" />
   <img src="https://img.shields.io/badge/License-MIT-black" alt="MIT License" />
-</p>
-
-<p align="center">
-  <a href="#快速开始">快速开始</a> ·
-  <a href="#作为-agent-skill-使用">Agent Skill</a> ·
-  <a href="#支持平台">支持平台</a> ·
-  <a href="#使用方法">使用方法</a> ·
-  <a href="#输出结果">输出结果</a> ·
-  <a href="#命令行参数">命令行参数</a> ·
-  <a href="#适用范围与限制">限制说明</a>
 </p>
 
 ## 快速开始
@@ -88,12 +74,12 @@ git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.cla
 
 ## 支持平台
 
-| 平台 | 状态 | 说明 |
-|---|---:|---|
-| 抖音 | ✅ 已支持 | 公开视频链接 |
+| 平台           |      状态 | 说明                         |
+| -------------- | --------: | ---------------------------- |
+| 抖音           | ✅ 已支持 | 公开视频链接                 |
 | B站 / Bilibili | ✅ 已支持 | 支持公开视频，支持 DASH 合并 |
-| 小红书 | ✅ 已支持 | 目前支持视频笔记 |
-| 更多平台 | 计划中 | 后续可通过平台适配层扩展 |
+| 小红书         | ✅ 已支持 | 目前支持视频笔记             |
+| 更多平台       |    计划中 | 后续可通过平台适配层扩展     |
 
 ## 功能特性
 
@@ -225,54 +211,54 @@ video_results/
 
 ```json
 {
-  "status": "success",
-  "source_url": "https://v.douyin.com/xxxxx",
-  "canonical_url": "https://www.douyin.com/video/740123456789",
-  "video_id": "740123456789",
-  "platform": "抖音",
-  "content_type": "video",
-  "title": "今天给大家分享一个技巧",
-  "description": "这个视频教大家怎么用 AI 提高效率 #AI #效率",
-  "author": {
-    "nickname": "张三",
-    "uid": "MS4wLjABAAAA...",
-    "url": "https://www.douyin.com/user/xxx"
-  },
-  "post_time": "2026-06-20 14:30:00",
-  "duration": 125,
-  "stats": {
-    "play_count": 1000,
-    "digg_count": 1234,
-    "comment_count": 56,
-    "share_count": 78,
-    "collect_count": 90
-  },
-  "transcript": "大家好，今天给大家分享一个非常好用的AI工具...",
-  "segments": [
-    {
-      "start": 0.0,
-      "end": 2.5,
-      "text": "大家好，今天...",
-      "simplified": true
-    }
-  ],
-  "transcript_source": "faster-whisper",
-  "transcription": {
-    "model": "medium",
-    "language": "zh",
-    "language_probability": 0.98,
-    "device": "cuda",
-    "compute_type": "float16"
-  },
-  "media_info": {
-    "width": 1080,
-    "height": 1920,
-    "resolution": "1080x1920",
-    "bitrate_kbps": 2500,
-    "duration_secs": 125.5,
-    "codec": "h264",
-    "format": "mov,mp4,m4a,3gp,3g2,mj2"
-  }
+	"status": "success",
+	"source_url": "https://v.douyin.com/xxxxx",
+	"canonical_url": "https://www.douyin.com/video/740123456789",
+	"video_id": "740123456789",
+	"platform": "抖音",
+	"content_type": "video",
+	"title": "今天给大家分享一个技巧",
+	"description": "这个视频教大家怎么用 AI 提高效率 #AI #效率",
+	"author": {
+		"nickname": "张三",
+		"uid": "MS4wLjABAAAA...",
+		"url": "https://www.douyin.com/user/xxx"
+	},
+	"post_time": "2026-06-20 14:30:00",
+	"duration": 125,
+	"stats": {
+		"play_count": 1000,
+		"digg_count": 1234,
+		"comment_count": 56,
+		"share_count": 78,
+		"collect_count": 90
+	},
+	"transcript": "大家好，今天给大家分享一个非常好用的AI工具...",
+	"segments": [
+		{
+			"start": 0.0,
+			"end": 2.5,
+			"text": "大家好，今天...",
+			"simplified": true
+		}
+	],
+	"transcript_source": "faster-whisper",
+	"transcription": {
+		"model": "medium",
+		"language": "zh",
+		"language_probability": 0.98,
+		"device": "cuda",
+		"compute_type": "float16"
+	},
+	"media_info": {
+		"width": 1080,
+		"height": 1920,
+		"resolution": "1080x1920",
+		"bitrate_kbps": 2500,
+		"duration_secs": 125.5,
+		"codec": "h264",
+		"format": "mov,mp4,m4a,3gp,3g2,mj2"
+	}
 }
 ```
 
@@ -281,34 +267,34 @@ video_results/
 <details>
 <summary>下载参数</summary>
 
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `--input <file>` | — | 从 UTF-8 文本文件读取链接 |
-| `--output <dir>` | `./video_results` | 输出目录 |
-| `--parse-concurrency <n>` | `1` | 并发浏览器解析数 |
-| `--download-concurrency <n>` | `1` | 并发下载数（默认串行以提高稳定性） |
-| `--max-attempts <n>` | `10` | 每条链接重试次数（0 = 无限重试） |
-| `--page-timeout <secs>` | `45` | 页面导航超时 |
-| `--media-wait <secs>` | `25` | 等待媒体响应时间 |
-| `--download-timeout <secs>` | `900` | 单个文件下载超时 |
-| `--headed` | 关闭 | 显示浏览器窗口 |
-| `--storage-state <file>` | — | Playwright storage-state JSON |
+| 参数                         | 默认值            | 说明                               |
+| ---------------------------- | ----------------- | ---------------------------------- |
+| `--input <file>`             | —                 | 从 UTF-8 文本文件读取链接          |
+| `--output <dir>`             | `./video_results` | 输出目录                           |
+| `--parse-concurrency <n>`    | `1`               | 并发浏览器解析数                   |
+| `--download-concurrency <n>` | `1`               | 并发下载数（默认串行以提高稳定性） |
+| `--max-attempts <n>`         | `10`              | 每条链接重试次数（0 = 无限重试）   |
+| `--page-timeout <secs>`      | `45`              | 页面导航超时                       |
+| `--media-wait <secs>`        | `25`              | 等待媒体响应时间                   |
+| `--download-timeout <secs>`  | `900`             | 单个文件下载超时                   |
+| `--headed`                   | 关闭              | 显示浏览器窗口                     |
+| `--storage-state <file>`     | —                 | Playwright storage-state JSON      |
 
 </details>
 
 <details>
 <summary>转写参数</summary>
 
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| `--no-transcribe` | 关闭 | 跳过 Whisper 转写 |
-| `--model <name>` | `medium` | Whisper 模型（`small`, `medium`, `large-v3`） |
-| `--language <code>` | `zh` | 语言代码，`auto` = 自动检测 |
-| `--device <cpu\|cuda>` | `cuda` | 转写设备 |
-| `--compute-type <type>` | `float16` | 精度（`int8`, `float16`, `float32`） |
-| `--no-simplify` | 关闭 | 跳过繁→简转换 |
-| `--ffmpeg-path <path>` | 自动 | ffmpeg 可执行文件路径 |
-| `--transcribe-timeout <secs>` | `600` | 单次转写超时 |
+| 参数                          | 默认值    | 说明                                          |
+| ----------------------------- | --------- | --------------------------------------------- |
+| `--no-transcribe`             | 关闭      | 跳过 Whisper 转写                             |
+| `--model <name>`              | `medium`  | Whisper 模型（`small`, `medium`, `large-v3`） |
+| `--language <code>`           | `zh`      | 语言代码，`auto` = 自动检测                   |
+| `--device <cpu\|cuda>`        | `cuda`    | 转写设备                                      |
+| `--compute-type <type>`       | `float16` | 精度（`int8`, `float16`, `float32`）          |
+| `--no-simplify`               | 关闭      | 跳过繁→简转换                                 |
+| `--ffmpeg-path <path>`        | 自动      | ffmpeg 可执行文件路径                         |
+| `--transcribe-timeout <secs>` | `600`     | 单次转写超时                                  |
 
 </details>
 

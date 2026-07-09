@@ -3,8 +3,10 @@ import { sanitizeName, itemKey, sleep, settleWithin } from "../utils/common.js";
 
 const URL_PATTERNS = [
   /^https?:\/\/v\.douyin\.com\//i,
-  /^https?:\/\/(?:www\.)?douyin\.com\//i,
-  /^https?:\/\/(?:www\.)?iesdouyin\.com\//i,
+  /^https?:\/\/(?:www\.)?douyin\.com\/(?:video|note)\/\d+/i,
+  /^https?:\/\/(?:www\.)?douyin\.com\/share\/(?:video|note)\/\d+/i,
+  /^https?:\/\/(?:www\.)?douyin\.com\/discover\?.*\bmodal_id=\d+/i,
+  /^https?:\/\/(?:www\.)?iesdouyin\.com\/share\/(?:video|note)\/\d+/i,
 ];
 
 export class DouyinParser extends PlatformParser {

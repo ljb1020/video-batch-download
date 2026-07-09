@@ -12,7 +12,7 @@ Rerun with `--headed`. Leave the browser open if Douyin presents a verification 
 
 ## A batch was interrupted
 
-Run the same command with the same output directory. `download-state.json` records completed items, and verified MP4 files are skipped.
+Run the same command with the same output directory. `download-state.json` records completed items, and verified MP4 cache files in `<output>/.temp` are reused. Deleting `.temp` does not remove already generated JSON/TXT or item-folder MP4 files, but it prevents cache-based resume/retry for missing video artifacts.
 
 ## A download URL expires
 
@@ -21,6 +21,10 @@ No manual action is required. A failed media transfer causes the item to return 
 ## Permanent failures
 
 Deleted, private, friends-only, login-only, and region-restricted works may never become downloadable. The final JSON summary distinguishes these from retryable network or verification failures.
+
+## Clearing media cache
+
+Use `node scripts/download.mjs --clear-temp --output ./video_results` to delete `<output>/.temp`. This only clears reusable media cache; it does not delete per-video result folders, JSON/TXT outputs, or MP4 files copied into item folders.
 
 ## Large batches
 

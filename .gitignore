@@ -11,3 +11,8 @@ download-summary.json
 *.m4s
 playwright-report/
 test-results/
+.auth/
+playwright/.auth/
+storage-state*.json
+*.storageState.json
+cookies*.json

@@ -148,6 +148,20 @@ node scripts/download.mjs --input links.txt --output ./video_results
 node scripts/download.mjs "url" --no-transcribe
 ```
 
+`--no-transcribe` still saves the MP4 next to the JSON by default.
+
+### Do not copy video into item folders
+
+```bash
+node scripts/download.mjs "url" --no-video-output
+```
+
+The final MP4 stays in `<output>/.temp/` as reusable cache, but is not copied into each video result folder. Clear the cache when you no longer need it:
+
+```bash
+node scripts/download.mjs --clear-temp --output ./video_results
+```
+
 ### Use GPU transcription
 
 ```bash
@@ -173,13 +187,13 @@ Video URL(s)
     ↓
 Playwright opens the page and detects media URLs
     ↓
-Download video / audio streams
+Download video / audio streams into <output>/.temp cache
     ↓
 Merge DASH streams with ffmpeg when needed
     ↓
 Extract audio and transcribe with faster-whisper
     ↓
-Save metadata, JSON, and TXT transcript locally
+Save MP4, metadata JSON, and TXT transcript locally
 ```
 
 Parse and download concurrency default to `1` for stability and can be raised with CLI flags. The Whisper model is loaded once per process and reused across items.
@@ -190,13 +204,18 @@ Each video gets its own subdirectory:
 
 ```txt
 video_results/
+  ├── .temp/                              # reusable media cache
+  │   └── 抖音_740123456789_a1b2c3d4e5f6.mp4
   ├── 2026_06_24_21-30-00_抖音_张三_740123456789/
+  │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.mp4
   │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.json
   │   └── 2026_06_24_21-30-00_抖音_张三_740123456789_transcript.txt
   ├── 2026_06_24_21-31-00_B站_李四_BV1xx411c7mD/
   │   └── ...
   └── download-summary.json
 ```
+
+By default, the final MP4 is copied into the per-video folder as a user-facing artifact. The `.temp` directory is a reusable media cache for resume/retry workflows. If you pass `--no-video-output`, the MP4 remains only in `.temp`; clear it later with `--clear-temp` when you want to free disk space.
 
 Rerun with the same output directory to resume from `download-state.json`.
 
@@ -251,7 +270,12 @@ Rerun with the same output directory to resume from `download-state.json`.
 		"duration_secs": 125.5,
 		"codec": "h264",
 		"format": "mov,mp4,m4a,3gp,3g2,mj2"
-	}
+	},
+	"output_file": "D:/.../video_results/.../...json",
+	"transcript_file": "D:/.../video_results/.../..._transcript.txt",
+	"video_file": "D:/.../video_results/.../...mp4",
+	"video_output": true,
+	"cache_video_file": "D:/.../video_results/.temp/抖音_740123456789_a1b2c3d4e5f6.mp4"
 }
 ```
 
@@ -270,6 +294,8 @@ Rerun with the same output directory to resume from `download-state.json`.
 | `--page-timeout <secs>`      | `45`              | Page navigation timeout                                      |
 | `--media-wait <secs>`        | `25`              | Wait for media response after navigation                     |
 | `--download-timeout <secs>`  | `900`             | Total download timeout per file                              |
+| `--no-video-output`          | off               | Keep MP4 only in `.temp` cache instead of copying it into each item folder |
+| `--clear-temp`               | off               | Delete `<output>/.temp` cache and exit                       |
 | `--headed`                   | off               | Show browser window                                          |
 | `--storage-state <file>`     | —                 | Playwright storage-state JSON                                |
 

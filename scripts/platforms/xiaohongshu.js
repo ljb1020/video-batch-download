@@ -160,7 +160,7 @@ export class XiaohongshuParser extends PlatformParser {
         author,
         description: noteData.desc ?? null,
         postTime,
-        duration: typeof duration === "number" ? Math.round(duration / 1000) : duration,
+        duration: this._normalizeDuration(duration),
         statistics,
         referer: "https://www.xiaohongshu.com/",
         mediaStreams: [
@@ -195,6 +195,12 @@ export class XiaohongshuParser extends PlatformParser {
     return null;
   }
 
+  _normalizeDuration(duration) {
+    if (typeof duration !== "number") return duration ?? null;
+    // Xiaohongshu fields vary by source: small values are seconds, large values are milliseconds.
+    return duration >= 1_000 ? Math.round(duration / 1000) : Math.round(duration);
+  }
+
   /**
    * Extract video CDN URL from note data.
    */
@@ -204,9 +210,12 @@ export class XiaohongshuParser extends PlatformParser {
 
     // Try stream URLs from video.media.stream (h264/h265)
     const stream = media.stream ?? {};
-    const h264 = stream.h264 ?? stream.h265 ?? [];
-    if (Array.isArray(h264) && h264.length > 0) {
-      const master = h264[0];
+    const candidates = [
+      ...(Array.isArray(stream.h264) ? stream.h264 : []),
+      ...(Array.isArray(stream.h265) ? stream.h265 : []),
+    ];
+    if (candidates.length > 0) {
+      const master = candidates[0];
       // master.url or master.masterUrl
       const masterUrl = master.masterUrl ?? master.url;
       if (masterUrl && /xhscdn\.com/i.test(masterUrl)) {

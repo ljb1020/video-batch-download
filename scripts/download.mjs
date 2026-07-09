@@ -1,18 +1,23 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
+import { fileURLToPath } from "node:url";
 
-import { sleep, retryDelay, safeFilename, isValidMp4, getVideoInfo, USER_AGENT } from "./utils/common.js";
+import { sleep, retryDelay, safeFilename, itemKey, isValidMp4, getVideoInfo, USER_AGENT } from "./utils/common.js";
 import { Semaphore } from "./utils/semaphore.js";
 import { StateStore } from "./utils/state-store.js";
 import { BrowserManager } from "./utils/browser-manager.js";
 import { extractAndRouteUrls } from "./platforms/router.js";
+
+const TEMP_DIR_NAME = ".temp";
+const AUDIO_PROBE_TIMEOUT_MS = 30_000;
+const FFMPEG_TIMEOUT_MS = 30 * 60_000;
 
 function usage() {
   console.log(`
@@ -28,6 +33,8 @@ Download options:
   --page-timeout <seconds>       Page navigation timeout (default: 45)
   --media-wait <seconds>         Wait for media after navigation (default: 25)
   --download-timeout <seconds>   Total time allowed per transfer (default: 900)
+  --no-video-output              Do not copy MP4 into item folders; keep it in .temp cache
+  --clear-temp                   Delete the output .temp cache and exit
   --headed                       Show the browser for verification fallback
   --storage-state <file>         Optional Playwright storage-state JSON
 
@@ -69,6 +76,35 @@ async function hasReusableTranscriptOutput(state) {
   return await fileExists(getTranscriptPathFromJsonPath(state.jsonPath));
 }
 
+async function hasReusableJsonOutput(state) {
+  return Boolean(state?.status === "completed" && state?.jsonPath && await fileExists(state.jsonPath));
+}
+
+function getCacheVideoPath(state) {
+  return state?.cacheVideoPath ?? state?.filePath ?? null;
+}
+
+async function getExistingCacheVideoPath(state) {
+  const cachePath = getCacheVideoPath(state);
+  return cachePath && await isValidMp4(cachePath) ? cachePath : null;
+}
+
+async function getReusableVideoPath(state) {
+  const candidates = [state?.cacheVideoPath, state?.filePath, state?.videoFilePath].filter(Boolean);
+  for (const candidate of [...new Set(candidates)]) {
+    if (await isValidMp4(candidate)) return candidate;
+  }
+  return null;
+}
+
+async function hasReusableCacheVideo(state) {
+  return Boolean(await getReusableVideoPath(state));
+}
+
+async function hasReusableVideoOutput(state) {
+  return Boolean(state?.videoOutput !== false && state?.videoFilePath && await isValidMp4(state.videoFilePath));
+}
+
 async function getPendingTranscriptions(items) {
   const pending = [];
   for (const item of items) {
@@ -76,6 +112,45 @@ async function getPendingTranscriptions(items) {
     pending.push(item);
   }
   return pending;
+}
+
+function getTempDir(outputDir) {
+  return path.join(outputDir, TEMP_DIR_NAME);
+}
+
+async function clearTempCache(outputDir) {
+  const tempDir = getTempDir(outputDir);
+  await fsp.rm(tempDir, { recursive: true, force: true });
+  return tempDir;
+}
+
+function getFfmpegExecutable(ffmpegPath) {
+  return ffmpegPath || "ffmpeg";
+}
+
+function ensureFfmpegAvailable(ffmpegPath) {
+  const exe = getFfmpegExecutable(ffmpegPath);
+  const result = spawnSync(exe, ["-version"], { stdio: "ignore" });
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message ?? `exit ${result.status}`;
+    throw new Error(`ffmpeg is required but could not be run (${exe}: ${detail})`);
+  }
+}
+
+function safePathSegment(value, fallback = "video", maxLen = 80) {
+  const raw = String(value ?? "");
+  const cleaned = raw
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
+    .replace(/\s+/g, " ")
+    .replace(/^[. ]+|[. ]+$/g, "")
+    .trim();
+  return (cleaned || fallback).slice(0, maxLen);
+}
+
+function getMediaCacheKey(parsed) {
+  const platform = safePathSegment(parsed.platform, "platform", 20);
+  const videoId = safePathSegment(parsed.videoId, itemKey(parsed.sourceUrl), 50);
+  return `${platform}_${videoId}_${itemKey(parsed.sourceUrl)}`;
 }
 
 function parsePositiveInt(value, option, { allowZero = false } = {}) {
@@ -98,6 +173,8 @@ function parseArgs(argv) {
     downloadTimeoutMs: 900_000,
     headed: false,
     storageState: null,
+    videoOutput: true,
+    clearTemp: false,
     // Transcription
     transcribe: true,
     model: "medium",
@@ -125,6 +202,8 @@ function parseArgs(argv) {
     else if (arg === "--page-timeout") options.pageTimeoutMs = parsePositiveInt(next(), arg) * 1_000;
     else if (arg === "--media-wait") options.mediaWaitMs = parsePositiveInt(next(), arg) * 1_000;
     else if (arg === "--download-timeout") options.downloadTimeoutMs = parsePositiveInt(next(), arg) * 1_000;
+    else if (arg === "--no-video-output") options.videoOutput = false;
+    else if (arg === "--clear-temp") options.clearTemp = true;
     else if (arg === "--storage-state") options.storageState = path.resolve(next());
     else if (arg === "--headed") options.headed = true;
     else if (arg === "--no-transcribe") options.transcribe = false;
@@ -148,11 +227,11 @@ function parseArgs(argv) {
 
 const _activeChildren = new Set();
 
-async function downloadSingleStream(stream, videoId, suffix, outputDir, timeoutMs) {
-  const tmpDir = path.join(outputDir, ".temp");
+async function downloadSingleStream(stream, mediaKey, suffix, outputDir, timeoutMs) {
+  const tmpDir = getTempDir(outputDir);
   await fsp.mkdir(tmpDir, { recursive: true });
   const ext = stream.format === "m4s" ? "m4s" : "mp4";
-  const filename = `${videoId}${suffix}.${ext}`;
+  const filename = `${mediaKey}${suffix}.${ext}`;
   const finalPath = path.join(tmpDir, filename);
   const partialPath = `${finalPath}.part`;
 
@@ -174,6 +253,7 @@ async function downloadSingleStream(stream, videoId, suffix, outputDir, timeoutM
         Referer: referer,
         "User-Agent": USER_AGENT,
         Accept: "video/mp4,video/*;q=0.9,*/*;q=0.8",
+        ...(stream.headers ?? {}),
       },
     });
 
@@ -226,33 +306,52 @@ async function hasAudioTrack(filePath, ffmpegPath) {
 
     const child = spawn(ffprobePath, args, { stdio: ["ignore", "pipe", "pipe"] });
     _activeChildren.add(child);
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      _activeChildren.delete(child);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill("SIGTERM"); } catch {}
+      finish(null);
+    }, AUDIO_PROBE_TIMEOUT_MS);
     let stdout = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.on("close", (code) => {
-      _activeChildren.delete(child);
-      if (code === 0) {
-        resolve(stdout.trim().includes("audio"));
-      } else {
-        resolve(null); // ffprobe failed, try ffmpeg
-      }
+      if (code === 0) finish(stdout.trim().includes("audio"));
+      else finish(null); // ffprobe failed, try ffmpeg
     });
-    child.on("error", () => { _activeChildren.delete(child); resolve(null); }); // ffprobe not found
+    child.on("error", () => finish(null)); // ffprobe not found
   });
 
   const tryFfmpeg = () => new Promise((resolve) => {
-    const exe = ffmpegPath || "ffmpeg";
+    const exe = getFfmpegExecutable(ffmpegPath);
     const args = ["-i", filePath, "-hide_banner", "-f", "null", "-"];
     const child = spawn(exe, args, { stdio: ["ignore", "pipe", "pipe"] });
     _activeChildren.add(child);
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      _activeChildren.delete(child);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill("SIGTERM"); } catch {}
+      finish(null);
+    }, AUDIO_PROBE_TIMEOUT_MS);
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", () => {
-      _activeChildren.delete(child);
       const hasAudio = stderr.includes("Audio:") ||
                        (stderr.includes("Stream #") && stderr.includes("audio"));
-      resolve(hasAudio);
+      finish(hasAudio);
     });
-    child.on("error", () => { _activeChildren.delete(child); resolve(false); }); // ffmpeg not found
+    child.on("error", () => finish(false)); // ffmpeg not found
   });
 
   // Try ffprobe first, then ffmpeg
@@ -263,9 +362,9 @@ async function hasAudioTrack(filePath, ffmpegPath) {
   return await tryFfmpeg();
 }
 
-async function mergeStreams(videoPath, audioPath, videoId, outputDir, ffmpegPath) {
-  const mergedPath = path.join(outputDir, ".temp", `${videoId}.mp4`);
-  const exe = ffmpegPath || "ffmpeg";
+async function mergeStreams(videoPath, audioPath, mediaKey, outputDir, ffmpegPath) {
+  const mergedPath = path.join(getTempDir(outputDir), `${mediaKey}.mp4`);
+  const exe = getFfmpegExecutable(ffmpegPath);
   const args = [
     "-hide_banner", "-loglevel", "error", "-y",
     "-i", videoPath,
@@ -279,40 +378,56 @@ async function mergeStreams(videoPath, audioPath, videoId, outputDir, ffmpegPath
   return new Promise((resolve, reject) => {
     const child = spawn(exe, args, { stdio: ["ignore", "pipe", "pipe"] });
     _activeChildren.add(child);
+    let settled = false;
+    const finish = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      _activeChildren.delete(child);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      try { child.kill("SIGTERM"); } catch {}
+      finish(() => reject(new Error("ffmpeg merge timed out")));
+    }, FFMPEG_TIMEOUT_MS);
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", (code) => {
-      _activeChildren.delete(child);
-      if (code === 0) resolve(mergedPath);
-      else {
-        const err = new Error(`ffmpeg merge failed (exit ${code}): ${stderr.trim()}`);
-        err.permanent = true;
-        reject(err);
-      }
+      finish(() => {
+        if (code === 0) resolve(mergedPath);
+        else {
+          const err = new Error(`ffmpeg merge failed (exit ${code}): ${stderr.trim()}`);
+          err.permanent = true;
+          reject(err);
+        }
+      });
     });
     child.on("error", (err) => {
-      _activeChildren.delete(child);
-      reject(new Error(`ffmpeg spawn error: ${err.message}`));
+      finish(() => reject(new Error(`ffmpeg spawn error: ${err.message}`)));
     });
   });
 }
 
 async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
   const streams = parsed.mediaStreams;
+  const mediaKey = getMediaCacheKey(parsed);
 
   // Single stream (e.g., Douyin or Bilibili durl fallback)
   if (streams.length === 1 && streams[0].type === "video+audio") {
     const downloaded = await downloadSingleStream(
       streams[0],
-      parsed.videoId,
+      mediaKey,
       "",
       outputDir,
       timeoutMs
     );
     const audioOk = await hasAudioTrack(downloaded.filePath, ffmpegPath);
-    if (!audioOk) {
+    if (audioOk === false) {
       await fsp.rm(downloaded.filePath, { force: true }).catch(() => {});
       throw new Error("Downloaded video has no audio track");
+    }
+    if (audioOk === null) {
+      console.warn("    [media] audio track probe was inconclusive; keeping downloaded video");
     }
     return downloaded;
   }
@@ -331,25 +446,28 @@ async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
 
   try {
     [videoFile, audioFile] = await Promise.all([
-      downloadSingleStream(videoStream, parsed.videoId, "_video", outputDir, timeoutMs),
-      downloadSingleStream(audioStream, parsed.videoId, "_audio", outputDir, timeoutMs),
+      downloadSingleStream(videoStream, mediaKey, "_video", outputDir, timeoutMs),
+      downloadSingleStream(audioStream, mediaKey, "_audio", outputDir, timeoutMs),
     ]);
 
     // Merge with ffmpeg
     mergedPath = await mergeStreams(
       videoFile.filePath,
       audioFile.filePath,
-      parsed.videoId,
+      mediaKey,
       outputDir,
       ffmpegPath
     );
 
     // Verify audio track exists
     const audioOk = await hasAudioTrack(mergedPath, ffmpegPath);
-    if (!audioOk) {
+    if (audioOk === false) {
       const err = new Error("Merged video has no audio track");
       err.permanent = true;
       throw err;
+    }
+    if (audioOk === null) {
+      console.warn("    [media] merged audio track probe was inconclusive; keeping merged video");
     }
 
     // Clean up intermediate files
@@ -373,7 +491,7 @@ async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
 
 async function extractAudio(mp4Path, ffmpegPath) {
   const wavPath = mp4Path.replace(/\.mp4$/i, "_16k.wav");
-  const exe = ffmpegPath || "ffmpeg";
+  const exe = getFfmpegExecutable(ffmpegPath);
   const args = [
     "-hide_banner", "-loglevel", "error", "-y",
     "-i", mp4Path,
@@ -384,16 +502,28 @@ async function extractAudio(mp4Path, ffmpegPath) {
   return new Promise((resolve, reject) => {
     const child = spawn(exe, args, { stdio: ["ignore", "pipe", "pipe"] });
     _activeChildren.add(child);
+    let settled = false;
+    const finish = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      _activeChildren.delete(child);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      try { child.kill("SIGTERM"); } catch {}
+      finish(() => reject(new Error("ffmpeg audio extraction timed out")));
+    }, FFMPEG_TIMEOUT_MS);
     let stderr = "";
     child.stderr.on("data", (chunk) => { stderr += chunk; });
     child.on("close", (code) => {
-      _activeChildren.delete(child);
-      if (code === 0) resolve(wavPath);
-      else reject(new Error(`ffmpeg failed (exit ${code}): ${stderr.trim()}`));
+      finish(() => {
+        if (code === 0) resolve(wavPath);
+        else reject(new Error(`ffmpeg failed (exit ${code}): ${stderr.trim()}`));
+      });
     });
     child.on("error", (err) => {
-      _activeChildren.delete(child);
-      reject(new Error(`ffmpeg spawn error: ${err.message}`));
+      finish(() => reject(new Error(`ffmpeg spawn error: ${err.message}`)));
     });
   });
 }
@@ -409,8 +539,7 @@ let _transcribeResponseBuf = "";
 let _transcribeReadyPromise = null;
 
 function getScriptDir() {
-  const raw = path.dirname(new URL(import.meta.url).pathname);
-  return process.platform === "win32" ? raw.replace(/^\/([A-Z]:)/i, "$1") : raw;
+  return path.dirname(fileURLToPath(import.meta.url));
 }
 
 function spawnTranscribeServer(options) {
@@ -425,23 +554,24 @@ function spawnTranscribeServer(options) {
   let proc = null;
   let lastErr = null;
   for (const pyExe of candidates) {
-    try {
-      proc = spawn(pyExe, [
-        serverPath,
-        "--model", options.model,
-        "--device", options.device,
-        "--compute-type", options.computeType,
-      ], {
-        stdio: ["pipe", "pipe", "pipe"],
-        cwd: scriptDir,
-        env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-      });
-      _activeChildren.add(proc);
-      proc.once("close", () => _activeChildren.delete(proc));
-      break;
-    } catch (err) {
-      lastErr = err;
+    const probe = spawnSync(pyExe, ["--version"], { stdio: "ignore" });
+    if (probe.error || probe.status !== 0) {
+      lastErr = probe.error ?? new Error(`${pyExe} --version exited ${probe.status}`);
+      continue;
     }
+    proc = spawn(pyExe, [
+      serverPath,
+      "--model", options.model,
+      "--device", options.device,
+      "--compute-type", options.computeType,
+    ], {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: scriptDir,
+      env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+    });
+    _activeChildren.add(proc);
+    proc.once("close", () => _activeChildren.delete(proc));
+    break;
   }
   if (!proc) throw new Error(`Cannot find Python executable (tried: ${candidates.join(", ")}): ${lastErr?.message}`);
 
@@ -458,6 +588,7 @@ function spawnTranscribeServer(options) {
       if (!_transcribeReady) reject(new Error(`transcribe_server spawn error: ${err.message}`));
     });
     proc.once("close", (code) => {
+      if (proc !== _transcribeProc) return;
       const wasReady = _transcribeReady;
       _transcribeProc = null;
       _transcribeReady = false;
@@ -467,7 +598,9 @@ function spawnTranscribeServer(options) {
     });
   });
 
+  _transcribeResponseBuf = "";
   proc.stdout.on("data", (chunk) => {
+    if (proc !== _transcribeProc) return;
     _transcribeResponseBuf += chunk.toString();
     let nlIdx;
     while ((nlIdx = _transcribeResponseBuf.indexOf("\n")) !== -1) {
@@ -490,9 +623,11 @@ function spawnTranscribeServer(options) {
   return _transcribeReadyPromise;
 }
 
-function stopTranscribeServer() {
+function stopTranscribeServer(reason = "transcribe server stopped") {
   if (!_transcribeProc) return;
   const proc = _transcribeProc;
+  while (_transcribeResolvers.length) _transcribeResolvers.shift()({ error: reason });
+  _transcribeResponseBuf = "";
   try {
     proc.stdin.write(JSON.stringify({ stop: true }) + "\n");
     proc.stdin.end();
@@ -522,6 +657,7 @@ async function transcribeAudio(wavPath, options) {
     const timer = setTimeout(() => {
       const idx = _transcribeResolvers.indexOf(resolver);
       if (idx !== -1) _transcribeResolvers.splice(idx, 1);
+      stopTranscribeServer("Transcription timeout");
       reject(new Error("Transcription timeout"));
     }, options.transcribeTimeoutMs);
 
@@ -551,8 +687,10 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
   const now = new Date();
   const timeStr = now.toISOString().replace("T", "_").replace(/[:.]/g, "-").slice(0, 19);
   const authorName = safeFilename(parsed.author?.nickname ?? "", 20);
-  const vid = parsed.videoId;
-  const base = `${timeStr}_${parsed.platform}_${authorName}_${vid}`;
+  const rawVideoId = parsed.videoId ?? itemKey(parsed.sourceUrl);
+  const fileVideoId = safePathSegment(rawVideoId, itemKey(parsed.sourceUrl), 50);
+  const platformName = safePathSegment(parsed.platform, "platform", 20);
+  const base = `${timeStr}_${platformName}_${authorName}_${fileVideoId}`;
   const itemDir = path.join(outputDir, base);
 
   fs.mkdirSync(itemDir, { recursive: true });
@@ -560,12 +698,14 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
   const segments = transcribeResult?.segments ?? [];
   const transcript = transcribeResult?.transcript ?? "";
   const tMeta = transcribeResult?.meta ?? null;
+  const jsonPath = path.join(itemDir, `${base}.json`);
+  const txtPath = transcript ? path.join(itemDir, `${base}_transcript.txt`) : null;
 
   const result = {
     status: "success",
     source_url: parsed.sourceUrl,
     canonical_url: parsed.canonicalUrl,
-    video_id: vid,
+    video_id: rawVideoId,
     platform: parsed.platform,
     content_type: "video",
     title: parsed.title,
@@ -579,25 +719,60 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
     transcript_source: tMeta ? "faster-whisper" : null,
     transcription: tMeta,
     media_info: null, // Will be filled by ffprobe
-    output_file: null,
-    transcript_file: null,
+    output_file: jsonPath,
+    transcript_file: txtPath,
+    video_file: null,
+    video_output: Boolean(options.videoOutput),
+    cache_video_file: mp4Info?.filePath ?? null,
   };
 
-  const jsonPath = path.join(itemDir, `${base}.json`);
-  fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), "utf8");
-  result.output_file = jsonPath;
-
-  if (transcript) {
-    const txtPath = path.join(itemDir, `${base}_transcript.txt`);
+  if (transcript && txtPath) {
     fs.writeFileSync(txtPath, transcript + "\n", "utf8");
-    result.transcript_file = txtPath;
+  }
+  fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), "utf8");
+
+  return { result, itemDir, jsonPath, base };
+}
+
+async function materializeVideoArtifact(mp4Info, itemDir, base, options = {}) {
+  const cacheVideoPath = mp4Info?.filePath ?? null;
+  if (!cacheVideoPath || !(await isValidMp4(cacheVideoPath))) {
+    return { videoFilePath: null, cacheVideoPath, videoOutput: false };
   }
 
-  return { result, itemDir, jsonPath };
+  if (!options.videoOutput) {
+    return { videoFilePath: null, cacheVideoPath, videoOutput: false };
+  }
+
+  const videoFilePath = path.join(itemDir, `${base}.mp4`);
+  if (path.resolve(cacheVideoPath) === path.resolve(videoFilePath)) {
+    return { videoFilePath, cacheVideoPath, videoOutput: true };
+  }
+
+  await fsp.rm(videoFilePath, { force: true });
+  try {
+    await fsp.link(cacheVideoPath, videoFilePath);
+  } catch {
+    await fsp.copyFile(cacheVideoPath, videoFilePath);
+  }
+
+  return { videoFilePath, cacheVideoPath, videoOutput: true };
+}
+
+async function patchJsonVideoArtifact(jsonPath, videoArtifact) {
+  try {
+    const result = JSON.parse(await fsp.readFile(jsonPath, "utf8"));
+    result.video_file = videoArtifact.videoFilePath;
+    result.video_output = videoArtifact.videoOutput;
+    result.cache_video_file = videoArtifact.cacheVideoPath;
+    await fsp.writeFile(jsonPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+  } catch (err) {
+    console.warn(`    [artifact] failed to update JSON video fields: ${err.message}`);
+  }
 }
 
 async function writeOutputsWithMediaInfo(parsed, transcribeResult, mp4Info, outputDir, options = {}) {
-  const { result, itemDir, jsonPath } = writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options);
+  const { result, itemDir, jsonPath, base } = writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options);
 
   // Probe video file for resolution/bitrate
   if (mp4Info?.filePath) {
@@ -605,21 +780,25 @@ async function writeOutputsWithMediaInfo(parsed, transcribeResult, mp4Info, outp
       const mediaInfo = await getVideoInfo(mp4Info.filePath, options.ffmpegPath ?? null);
       if (mediaInfo) {
         result.media_info = mediaInfo;
-        // Re-write JSON with media_info
-        fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), "utf8");
 
         // Log quality info
         const res = mediaInfo.resolution ?? "unknown";
         const bitrate = mediaInfo.bitrate_kbps ? `${mediaInfo.bitrate_kbps} kbps` : "unknown";
         const codec = mediaInfo.codec ?? "unknown";
-        console.log(`    [media] ${res}, ${bitrate}, ${codec}`);
+        console.error(`    [media] ${res}, ${bitrate}, ${codec}`);
       }
     } catch (err) {
       console.warn(`    [media] ffprobe failed: ${err.message}`);
     }
   }
 
-  return { result, itemDir, jsonPath };
+  const videoArtifact = await materializeVideoArtifact(mp4Info, itemDir, base, options);
+  result.video_file = videoArtifact.videoFilePath;
+  result.video_output = videoArtifact.videoOutput;
+  result.cache_video_file = videoArtifact.cacheVideoPath;
+  fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), "utf8");
+
+  return { result, itemDir, jsonPath, ...videoArtifact };
 }
 
 function writeFailedOutput(sourceUrl, errorMessage, errorType, outputDir, platform) {
@@ -663,6 +842,13 @@ async function main() {
     return;
   }
 
+  if (options.clearTemp) {
+    await fsp.mkdir(options.output, { recursive: true });
+    const tempDir = await clearTempCache(options.output);
+    console.log(JSON.stringify({ status: "cleared", tempDir }, null, 2));
+    return;
+  }
+
   let inputText = options.texts.join("\n");
   if (options.input) inputText += `\n${await fsp.readFile(options.input, "utf8")}`;
   inputText = inputText.replace(/^﻿/, ""); // strip UTF-8 BOM
@@ -686,7 +872,7 @@ async function main() {
   const stop = async () => {
     if (stopping) return;
     stopping = true;
-    console.log("\nStopping after current operations...");
+    console.error("\nStopping after current operations...");
     stopTranscribeServer();
     for (const child of _activeChildren) {
       try { child.kill("SIGTERM"); } catch {}
@@ -696,26 +882,74 @@ async function main() {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
-  console.log(
+  console.error(
     `[batch] ${urlsWithParsers.length} unique URL(s), ` +
       `parse concurrency ${options.parseConcurrency}, ` +
       `download concurrency ${options.downloadConcurrency}, ` +
+      `video output ${options.videoOutput ? "item folders" : ".temp cache only"}, ` +
       `transcribe ${options.transcribe ? `on (serial, ${options.model}, ${options.device})` : "off"}, ` +
       `output ${options.output}`,
   );
 
   // Phase 1: Parse + Download
-  console.log(`\n[phase 1] downloading ${urlsWithParsers.length} video(s)...`);
+  console.error(`\n[phase 1] downloading ${urlsWithParsers.length} video(s)...`);
 
   async function processDownload({ url, ParserClass }, index) {
     const label = `[${index + 1}/${urlsWithParsers.length}]`;
     const previous = store.get(url);
-    if (previous?.status === "completed" && previous.filePath && (await isValidMp4(previous.filePath))) {
-      console.log(`${label} already complete: ${previous.filePath}`);
+    if (await hasReusableJsonOutput(previous)) {
+      const transcriptOk = !options.transcribe || await hasReusableTranscriptOutput(previous);
+      let videoOk = !options.videoOutput || await hasReusableVideoOutput(previous);
+
+      if (!videoOk && options.videoOutput && await hasReusableCacheVideo(previous)) {
+        const jsonPath = previous.jsonPath;
+        const itemDir = path.dirname(jsonPath);
+        const base = path.basename(jsonPath, ".json");
+        const artifact = await materializeVideoArtifact(
+          { filePath: await getReusableVideoPath(previous), bytes: previous.bytes },
+          itemDir,
+          base,
+          options,
+        );
+        await patchJsonVideoArtifact(jsonPath, artifact);
+        await store.update(url, {
+          videoFilePath: artifact.videoFilePath,
+          cacheVideoPath: artifact.cacheVideoPath,
+          videoOutput: artifact.videoOutput,
+        });
+        previous.videoFilePath = artifact.videoFilePath;
+        previous.cacheVideoPath = artifact.cacheVideoPath;
+        previous.videoOutput = artifact.videoOutput;
+        videoOk = Boolean(artifact.videoFilePath);
+      }
+
+      if (transcriptOk && videoOk) {
+        console.error(`${label} already complete: ${previous.jsonPath}`);
+        results.push({
+          url,
+          status: "completed",
+          filePath: await getReusableVideoPath(previous),
+          videoFilePath: previous.videoFilePath,
+          bytes: previous.bytes,
+          resumed: true,
+        });
+        return;
+      }
+    }
+
+    if (previous?.parsed && await hasReusableCacheVideo(previous)) {
+      const cacheVideoPath = await getReusableVideoPath(previous);
+      await store.update(url, {
+        status: "downloaded",
+        filePath: cacheVideoPath,
+        cacheVideoPath,
+        lastError: null,
+      });
+      console.error(`${label} using cached video: ${cacheVideoPath}`);
       results.push({
         url,
-        status: "completed",
-        filePath: previous.filePath,
+        status: "downloaded",
+        filePath: cacheVideoPath,
         bytes: previous.bytes,
         resumed: true,
       });
@@ -726,9 +960,10 @@ async function main() {
     while (!stopping && (options.maxAttempts === 0 || attempt < options.maxAttempts)) {
       attempt += 1;
       await store.update(url, { status: "parsing", attempt, lastError: null });
-      console.log(`${label} parse attempt ${attempt}${options.maxAttempts ? `/${options.maxAttempts}` : ""}: ${url}`);
+      console.error(`${label} parse attempt ${attempt}${options.maxAttempts ? `/${options.maxAttempts}` : ""}: ${url}`);
 
       try {
+        ensureFfmpegAvailable(options.ffmpegPath);
         const parser = new ParserClass();
         const parsed = await parseSemaphore.use(() => parser.parse(browserManager, url, options));
 
@@ -747,13 +982,14 @@ async function main() {
         await store.update(url, {
           status: "downloaded",
           attempt,
-          filePath: downloaded.filePath,
+          filePath: downloaded.filePath, // Backward-compatible cache path alias
+          cacheVideoPath: downloaded.filePath,
           bytes: downloaded.bytes,
           parsed,
           lastError: null,
         });
 
-        console.log(`${label} downloaded (${downloaded.bytes} bytes)`);
+        console.error(`${label} downloaded (${downloaded.bytes} bytes)`);
         results.push({
           url,
           status: "downloaded",
@@ -796,7 +1032,7 @@ async function main() {
     );
   } finally {
     await browserManager.close();
-    console.log("[phase 1] browser closed\n");
+    console.error("[phase 1] browser closed\n");
   }
 
   // Phase 1.5: Write outputs for downloaded items (skip-transcribe mode)
@@ -804,16 +1040,17 @@ async function main() {
     const urls = urlsWithParsers.map((item) => item.url);
     const downloaded = urls
       .map((url) => ({ url, state: store.get(url) }))
-      .filter((item) => item.state?.status === "downloaded" && item.state?.filePath && item.state?.parsed);
+      .filter((item) => item.state?.status === "downloaded" && getCacheVideoPath(item.state) && item.state?.parsed);
 
     if (downloaded.length > 0) {
-      console.log(`[phase 1.5] writing outputs for ${downloaded.length} video(s) (transcription skipped)...`);
+      console.error(`[phase 1.5] writing outputs for ${downloaded.length} video(s) (transcription skipped)...`);
       for (const { url, state } of downloaded) {
         try {
-          const { jsonPath } = await writeOutputsWithMediaInfo(
+          const cacheVideoPath = getCacheVideoPath(state);
+          const { jsonPath, videoFilePath, videoOutput, cacheVideoPath: outputCacheVideoPath } = await writeOutputsWithMediaInfo(
             state.parsed,
             null,
-            { filePath: state.filePath, bytes: state.bytes },
+            { filePath: cacheVideoPath, bytes: state.bytes },
             options.output,
             options
           );
@@ -821,9 +1058,12 @@ async function main() {
             status: "completed",
             jsonPath,
             hasTranscript: false,
+            videoFilePath,
+            videoOutput,
+            cacheVideoPath: outputCacheVideoPath,
             lastError: null,
           });
-          console.log(`  completed: ${jsonPath}`);
+          console.error(`  completed: ${jsonPath}`);
         } catch (err) {
           console.warn(`  failed to write output for ${url}: ${err.message}`);
           await store.update(url, { status: "failed", lastError: err.message });
@@ -835,16 +1075,21 @@ async function main() {
   // Phase 2: Transcribe
   if (options.transcribe) {
     const urls = urlsWithParsers.map((item) => item.url);
-    const downloaded = urls
-      .map((url) => ({ url, state: store.get(url) }))
-      .filter((item) => item.state?.filePath && item.state?.parsed);
+    const downloaded = [];
+    for (const url of urls) {
+      const state = store.get(url);
+      if (state?.status !== "downloaded" || !state?.parsed) continue;
+      const reusableVideoPath = await getReusableVideoPath(state);
+      if (!reusableVideoPath) continue;
+      downloaded.push({ url, state: { ...state, cacheVideoPath: reusableVideoPath, filePath: reusableVideoPath } });
+    }
     const pending = await getPendingTranscriptions(downloaded);
 
     if (pending.length === 0) {
-      console.log("[phase 2] nothing to transcribe");
+      console.error("[phase 2] nothing to transcribe");
     } else {
       const skipped = downloaded.length - pending.length;
-      console.log(
+      console.error(
         `[phase 2] transcribing ${pending.length} video(s)` +
         (skipped > 0 ? ` (${skipped} already transcribed)` : "") +
         "..."
@@ -858,25 +1103,56 @@ async function main() {
         serverReady = false;
       }
 
+      if (!serverReady) {
+        for (const { url, state } of pending) {
+          const cacheVideoPath = getCacheVideoPath(state);
+          try {
+            const { jsonPath, videoFilePath, videoOutput, cacheVideoPath: outputCacheVideoPath } = await writeOutputsWithMediaInfo(
+              state.parsed,
+              null,
+              { filePath: cacheVideoPath, bytes: state.bytes },
+              options.output,
+              options,
+            );
+            await store.update(url, {
+              status: "completed",
+              jsonPath,
+              hasTranscript: false,
+              videoFilePath,
+              videoOutput,
+              cacheVideoPath: outputCacheVideoPath,
+              lastError: "Transcription server failed to start",
+            });
+            console.error(`  completed without transcript: ${jsonPath}`);
+          } catch (writeErr) {
+            await store.update(url, { status: "failed", lastError: writeErr.message });
+          }
+        }
+      }
+
       if (serverReady) {
         for (let i = 0; i < pending.length; i++) {
           if (stopping) break;
           const { url, state } = pending[i];
           const label = `[${i + 1}/${pending.length}]`;
+          const cacheVideoPath = getCacheVideoPath(state);
           let wavPath = null;
 
           try {
+            if (!_transcribeProc) {
+              await spawnTranscribeServer(options);
+            }
             await store.update(url, { status: "transcribing" });
-            console.log(`${label} extracting audio...`);
-            wavPath = await extractAudio(state.filePath, options.ffmpegPath);
-            console.log(`${label} transcribing (${options.model}, ${options.device})...`);
+            console.error(`${label} extracting audio...`);
+            wavPath = await extractAudio(cacheVideoPath, options.ffmpegPath);
+            console.error(`${label} transcribing (${options.model}, ${options.device})...`);
 
             const transcribeResult = await transcribeAudio(wavPath, options);
 
-            const { jsonPath } = await writeOutputsWithMediaInfo(
+            const { jsonPath, videoFilePath, videoOutput, cacheVideoPath: outputCacheVideoPath } = await writeOutputsWithMediaInfo(
               state.parsed,
               transcribeResult,
-              { filePath: state.filePath, bytes: state.bytes },
+              { filePath: cacheVideoPath, bytes: state.bytes },
               options.output,
               options
             );
@@ -885,16 +1161,19 @@ async function main() {
               status: "completed",
               jsonPath,
               hasTranscript: Boolean(transcribeResult?.transcript),
+              videoFilePath,
+              videoOutput,
+              cacheVideoPath: outputCacheVideoPath,
               lastError: null,
             });
-            console.log(`${label} complete (${state.bytes} bytes, transcribed): ${jsonPath}`);
+            console.error(`${label} complete (${state.bytes} bytes, transcribed): ${jsonPath}`);
           } catch (err) {
             console.warn(`${label} transcribe failed: ${err.message}`);
             try {
-              const { jsonPath } = await writeOutputsWithMediaInfo(
+              const { jsonPath, videoFilePath, videoOutput, cacheVideoPath: outputCacheVideoPath } = await writeOutputsWithMediaInfo(
                 state.parsed,
                 null,
-                { filePath: state.filePath, bytes: state.bytes },
+                { filePath: cacheVideoPath, bytes: state.bytes },
                 options.output,
                 options
               );
@@ -902,9 +1181,12 @@ async function main() {
                 status: "completed",
                 jsonPath,
                 hasTranscript: false,
+                videoFilePath,
+                videoOutput,
+                cacheVideoPath: outputCacheVideoPath,
                 lastError: err.message,
               });
-              console.log(`${label} completed without transcript: ${jsonPath}`);
+              console.error(`${label} completed without transcript: ${jsonPath}`);
             } catch (writeErr) {
               await store.update(url, { status: "failed", lastError: writeErr.message });
             }
@@ -920,19 +1202,23 @@ async function main() {
 
   // Final summary
   const urls = urlsWithParsers.map((item) => item.url);
-  const finalResults = urls.map((url) => {
+  const finalResults = await Promise.all(urls.map(async (url) => {
     const s = store.get(url);
+    const cacheVideoFile = await getExistingCacheVideoPath(s);
     return {
       url,
       status: s?.status ?? "unknown",
       videoId: s?.videoId,
       title: s?.title,
       jsonPath: s?.jsonPath,
+      videoFile: s?.videoFilePath ?? null,
+      videoOutput: s?.videoOutput ?? false,
+      cacheVideoFile,
       bytes: s?.bytes,
       hasTranscript: s?.hasTranscript ?? false,
       lastError: s?.lastError,
     };
-  });
+  }));
 
   const summary = {
     total: urls.length,
@@ -942,6 +1228,10 @@ async function main() {
     permanentFailures: finalResults.filter((r) => r.status === "permanent_failure").length,
     outputDir: options.output,
     stateFile: store.file,
+    videoOutput: options.videoOutput,
+    videoPolicy: options.videoOutput ? "item" : "temp",
+    videosOutput: finalResults.filter((r) => r.videoOutput && r.videoFile).length,
+    videosInCache: finalResults.filter((r) => r.cacheVideoFile).length,
     transcribe: options.transcribe
       ? { model: options.model, device: options.device, computeType: options.computeType }
       : null,

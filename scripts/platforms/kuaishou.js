@@ -90,8 +90,13 @@ export class KuaishouParser extends PlatformParser {
         throw error;
       }
 
+      const mp4Candidates = candidates.filter((candidate) => !/\.m3u8(?:[?#]|$)/i.test(candidate.url));
+      if (mp4Candidates.length === 0) {
+        throw new Error("Only HLS playlist candidates were found; MP4 download is not supported for this video");
+      }
+
       // Sort candidates by quality
-      candidates.sort((a, b) => this._candidateScore(b) - this._candidateScore(a));
+      mp4Candidates.sort((a, b) => this._candidateScore(b) - this._candidateScore(a));
 
       // 快手未登录时显示推荐列表，当前视频元数据有限
       // 从页面标题提取（去掉 "-快手" 后缀）
@@ -115,7 +120,7 @@ export class KuaishouParser extends PlatformParser {
         referer: "https://www.kuaishou.com/",
         mediaStreams: [
           {
-            url: candidates[0].url,
+            url: mp4Candidates[0].url,
             type: "video+audio",
             format: "mp4",
             referer: "https://www.kuaishou.com/",

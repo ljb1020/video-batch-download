@@ -140,7 +140,7 @@ def main():
                     converter = opencc.OpenCC("t2s.json")
                 except ImportError:
                     print(
-                        "Missing opencc-python-reimplemented. Run: pip install opencc-python-reimplemented",
+                        "Missing opencc. Run: pip install -U opencc",
                         file=sys.stderr,
                     )
                     print(json.dumps({"error": "opencc not installed, cannot simplify text"}), flush=True)

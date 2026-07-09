@@ -44,10 +44,10 @@ Default transcription uses `medium + cuda + float16 + zh`, which works best on m
 2. **Ask for output directory** — If user doesn't specify, default to `./video_results/`.
 3. **Run the script** — Parallel pipeline:
     - Parse video metadata via Playwright browser interception (concurrency 1 by default for stability)
-    - Download MP4 via CDN URL (concurrency 1 by default for stability). For Bilibili DASH format, downloads video and audio streams separately and merges with ffmpeg.
+    - Download MP4 via CDN URL into `<output>/.temp` cache (concurrency 1 by default for stability). For Bilibili DASH format, downloads video and audio streams separately and merges with ffmpeg.
     - Extract audio with ffmpeg → transcribe with local faster-whisper (model reused, conservative CUDA default)
     - Convert Traditional Chinese to Simplified via OpenCC
-    - Write structured JSON + plain text transcript
+    - Write MP4 (by default), structured JSON, and plain text transcript into each video result folder
 4. **Report results** — Real-time progress on stderr + final JSON summary on stdout.
 
 ## Usage
@@ -83,10 +83,22 @@ node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com
 node scripts/download.mjs --input links.txt --output ./video_results
 ```
 
-### Skip transcription (download metadata only)
+### Skip transcription (download video and metadata only)
 
 ```bash
 node scripts/download.mjs "url" --no-transcribe
+```
+
+### Do not copy video into item folders
+
+```bash
+node scripts/download.mjs "url" --no-video-output
+```
+
+The final MP4 stays in `<output>/.temp/` as reusable cache. Clear that cache when it is no longer needed:
+
+```bash
+node scripts/download.mjs --clear-temp --output ./video_results
 ```
 
 ### GPU acceleration with high accuracy
@@ -121,6 +133,8 @@ node scripts/download.mjs --input links.txt --output ./downloads --headed
 | `--page-timeout <secs>` | `45` | Page navigation timeout |
 | `--media-wait <secs>` | `25` | Wait for media response after navigation |
 | `--download-timeout <secs>` | `900` | Total download timeout per file |
+| `--no-video-output` | off | Keep MP4 only in `.temp` cache instead of copying it into item folders |
+| `--clear-temp` | off | Delete `<output>/.temp` cache and exit |
 | `--headed` | off | Show browser window |
 | `--storage-state <file>` | — | Playwright storage-state JSON |
 
@@ -143,13 +157,18 @@ Each video gets its own subdirectory:
 
 ```
 video_results/
+  ├── .temp/                              # reusable media cache
+  │   └── 抖音_740123456789_a1b2c3d4e5f6.mp4
   ├── 2026_06_24_21-30-00_抖音_张三_740123456789/
+  │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.mp4
   │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.json
   │   └── 2026_06_24_21-30-00_抖音_张三_740123456789_transcript.txt
   ├── 2026_06_24_21-31-00_B站_李四_BV1xx411c7mD/
   │   └── ...
   └── download-summary.json
 ```
+
+By default, the final MP4 is copied into the per-video folder. The `.temp` directory is a reusable cache for resume/retry workflows. With `--no-video-output`, MP4 files stay only in `.temp` and are not copied into result folders.
 
 ### JSON format
 
@@ -202,7 +221,12 @@ video_results/
     "duration_secs": 125.5,
     "codec": "h264",
     "format": "mov,mp4,m4a,3gp,3g2,mj2"
-  }
+  },
+  "output_file": "D:/.../video_results/.../...json",
+  "transcript_file": "D:/.../video_results/.../..._transcript.txt",
+  "video_file": "D:/.../video_results/.../...mp4",
+  "video_output": true,
+  "cache_video_file": "D:/.../video_results/.temp/抖音_740123456789_a1b2c3d4e5f6.mp4"
 }
 ```
 

@@ -148,6 +148,20 @@ node scripts/download.mjs --input links.txt --output ./video_results
 node scripts/download.mjs "url" --no-transcribe
 ```
 
+`--no-transcribe` 默认仍会把 MP4 和 JSON 放在同一个视频结果目录中。
+
+### 不将视频放入结果目录
+
+```bash
+node scripts/download.mjs "url" --no-video-output
+```
+
+最终 MP4 会留在 `<output>/.temp/` 作为可复用缓存，但不会复制到每个视频结果目录。需要释放空间时，可以清理缓存：
+
+```bash
+node scripts/download.mjs --clear-temp --output ./video_results
+```
+
 ### 使用 GPU 转写
 
 ```bash
@@ -173,13 +187,13 @@ node scripts/download.mjs --input links.txt --output ./downloads --headed
     ↓
 Playwright 打开页面并捕获媒体地址
     ↓
-下载视频 / 音频流
+下载视频 / 音频流到 <output>/.temp 缓存
     ↓
 必要时通过 ffmpeg 合并 DASH 流
     ↓
 提取音频并通过 faster-whisper 本地转写
     ↓
-保存元数据、JSON 和 TXT 文案
+保存 MP4、元数据 JSON 和 TXT 文案
 ```
 
 解析与下载默认并发为 `1`，更稳定，可通过 CLI 参数提高。Whisper 模型在进程内加载一次并复用。
@@ -190,13 +204,18 @@ Playwright 打开页面并捕获媒体地址
 
 ```txt
 video_results/
+  ├── .temp/                              # 可复用媒体缓存
+  │   └── 抖音_740123456789_a1b2c3d4e5f6.mp4
   ├── 2026_06_24_21-30-00_抖音_张三_740123456789/
+  │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.mp4
   │   ├── 2026_06_24_21-30-00_抖音_张三_740123456789.json
   │   └── 2026_06_24_21-30-00_抖音_张三_740123456789_transcript.txt
   ├── 2026_06_24_21-31-00_B站_李四_BV1xx411c7mD/
   │   └── ...
   └── download-summary.json
 ```
+
+默认情况下，最终 MP4 会复制到每个视频目录，作为用户可见的正式产物。`.temp` 是可复用媒体缓存，用于断点续传、失败重试和后续补处理。如果传入 `--no-video-output`，MP4 只保留在 `.temp`，不会进入视频结果目录；不需要缓存时可用 `--clear-temp` 清理。
 
 使用同一输出目录重跑时，会复用 `download-state.json` 做断点续传。
 
@@ -251,7 +270,12 @@ video_results/
 		"duration_secs": 125.5,
 		"codec": "h264",
 		"format": "mov,mp4,m4a,3gp,3g2,mj2"
-	}
+	},
+	"output_file": "D:/.../video_results/.../...json",
+	"transcript_file": "D:/.../video_results/.../..._transcript.txt",
+	"video_file": "D:/.../video_results/.../...mp4",
+	"video_output": true,
+	"cache_video_file": "D:/.../video_results/.temp/抖音_740123456789_a1b2c3d4e5f6.mp4"
 }
 ```
 
@@ -270,6 +294,8 @@ video_results/
 | `--page-timeout <secs>`      | `45`              | 页面导航超时                       |
 | `--media-wait <secs>`        | `25`              | 等待媒体响应时间                   |
 | `--download-timeout <secs>`  | `900`             | 单个文件下载超时                   |
+| `--no-video-output`          | 关闭              | MP4 只保留在 `.temp` 缓存，不复制到每个视频目录 |
+| `--clear-temp`               | 关闭              | 删除 `<output>/.temp` 缓存并退出   |
 | `--headed`                   | 关闭              | 显示浏览器窗口                     |
 | `--storage-state <file>`     | —                 | Playwright storage-state JSON      |
 

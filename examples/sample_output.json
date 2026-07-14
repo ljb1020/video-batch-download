@@ -68,6 +68,38 @@
     "device": "cuda",
     "compute_type": "float16"
   },
+  "quality": {
+    "access_mode": "anonymous",
+    "selection_version": "anonymous-best-v1",
+    "available_streams": [
+      {
+        "type": "video+audio",
+        "format": "mp4",
+        "width": 1080,
+        "height": 1920,
+        "fps": 30,
+        "quality": 1080,
+        "resolution": "1080x1920"
+      }
+    ],
+    "selected_streams": [
+      {
+        "type": "video+audio",
+        "format": "mp4",
+        "width": 1080,
+        "height": 1920,
+        "fps": 30,
+        "quality": 1080,
+        "resolution": "1080x1920"
+      }
+    ],
+    "audit": {
+      "advertisedQualities": ["1080P", "720P"],
+      "accessibleQualities": ["1080P", "720P"],
+      "selectedQuality": "1080P",
+      "selectionReason": "Highest quality available without login"
+    }
+  },
   "media_info": {
     "width": 1080,
     "height": 1920,
@@ -78,5 +110,8 @@
     "format": "mov,mp4,m4a,3gp,3g2,mj2"
   },
   "output_file": "douyin_results/2026_06_24_21-30-00_抖音_张三_7401234567890123456/2026_06_24_21-30-00_抖音_张三_7401234567890123456.json",
-  "transcript_file": "douyin_results/2026_06_24_21-30-00_抖音_张三_7401234567890123456/2026_06_24_21-30-00_抖音_张三_7401234567890123456_transcript.txt"
+  "transcript_file": "douyin_results/2026_06_24_21-30-00_抖音_张三_7401234567890123456/2026_06_24_21-30-00_抖音_张三_7401234567890123456_transcript.txt",
+  "video_file": "douyin_results/2026_06_24_21-30-00_抖音_张三_7401234567890123456/2026_06_24_21-30-00_抖音_张三_7401234567890123456.mp4",
+  "video_output": true,
+  "cache_video_file": "douyin_results/.temp/抖音_7401234567890123456_a1b2c3d4e5f6.mp4"
 }

@@ -25,7 +25,7 @@
 | Bilibili       | ✅ Supported  | Public videos; DASH merge and playurl fallbacks   |
 | Kuaishou       | ✅ Supported  | Public videos; exact photo-ID page-state matching |
 | Xiaohongshu    | ✅ Supported  | Public video notes; note and media fallbacks      |
-| Weibo          | ✅ Supported  | Public Weibo videos; highest-quality muxed MP4    |
+| Weibo          | ✅ Supported  | Public videos; highest quality available without login |
 | More platforms |    🚧 Planned | Extendable through the platform adapter layer     |
 
 ## Features
@@ -358,6 +358,8 @@ Rerun with the same output directory to resume from `download-state.json`.
 ```txt
 Video URL(s)
     ↓
+Thin CLI entry delegates to the modular batch pipeline
+    ↓
 Discover platform plugins; skip disabled or broken plugins
     ↓
 Route each URL through `matchesUrl()` and validate normalized parser output
@@ -383,7 +385,7 @@ After changing platform plugins, routing, or the normalized output contract, run
 npm test
 ```
 
-The tests cover plugin discovery, disabling and failure isolation, URL routing, normalized parser-result validation, and per-platform quality ordering without login. They do not download real videos.
+The tests cover CLI parsing, entry behavior, cache/resume compatibility, plugin discovery and isolation, URL routing, normalized parser results, and per-platform selection of the highest quality available without login. They do not download real videos.
 
 ## Reference Docs
 

@@ -2,6 +2,8 @@
 
 Public links from Douyin, Bilibili, Kuaishou, Xiaohongshu, and Weibo are accepted. For example:
 
+All platforms use the same policy: select the highest quality available without login from the streams the platform actually exposes, then record the selection and any fallback in the JSON output.
+
 ```bash
 node scripts/download.mjs "https://v.kuaishou.com/xxxxx" --no-transcribe
 node scripts/download.mjs "https://video.weibo.com/show?fid=1034:5317814823878730" --no-transcribe
@@ -56,7 +58,7 @@ node scripts/download.mjs \
   --output ./weibo_results
 ```
 
-The Weibo adapter matches the requested `fid`, selects the highest-quality muxed MP4 exposed by the page, then uses the same download, track-validation, transcription, and output pipeline as every other platform.
+The Weibo adapter matches the requested `fid`, selects the highest quality available without login, then uses the same download, track-validation, transcription, and output pipeline as every other platform.
 
 ## Example: Temporarily disable platform plugins
 

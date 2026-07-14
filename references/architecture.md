@@ -10,7 +10,7 @@
 - B站（Bilibili）— DASH 多流（视频+音频分离）自动合并，支持播放流兜底
 - 快手（Kuaishou）— 按目标作品 ID 读取 Apollo/GraphQL 详情和 H.264 MP4
 - 小红书（Xiaohongshu）— 视频笔记单流 MP4，支持目标笔记状态和媒体响应兜底
-- 微博（Weibo）— 按目标 `fid`/`oid` 读取组件数据，选择无登录态可用的最高画质合流 MP4
+- 微博（Weibo）— 按目标 `fid`/`oid` 读取组件数据，选择无登录态的最高画质合流 MP4
 
 ---
 
@@ -49,7 +49,7 @@
 └──────────────────┬──────────────────────────┘
                    ↓
 ┌─────────────────────────────────────────────┐
-│         下载器（download.mjs）               │
+│      媒体层（media/downloader.js）            │
 │                                             │
 │  单流 (video+audio) → 下载到 .temp 缓存      │
 │                                             │
@@ -60,10 +60,30 @@
 │  完成前校验最终 MP4 同时含视频轨和音频轨      │
 └──────────────────┬──────────────────────────┘
                    ↓
-         （后续流程：转写、输出 — 平台无关）
+      pipeline 编排 → 转写 → 输出（平台无关）
 ```
 
-### 2.2 关键设计决策
+### 2.2 核心模块边界
+
+`scripts/download.mjs` 只是稳定的 CLI 启动入口，不承载业务逻辑。核心依赖方向如下：
+
+```text
+download.mjs
+  → pipeline/run-batch.js
+      ├── cli/options.js
+      ├── download-phase.js → platforms + media + core/resume
+      ├── transcribe-phase.js → transcription + media/ffmpeg
+      └── output/writer.js
+```
+
+- `cli/`：参数、帮助文本和输入文件读取。
+- `core/`：画质策略版本、临时目录和断点续传判断。
+- `media/`：流下载、候选降级、ffmpeg 合并/探测/音频提取和活动进程清理。
+- `transcription/`：持久化 Python Whisper 服务及请求队列的生命周期。
+- `output/`：JSON/TXT、视频副本、失败结果和批次 summary 落盘。
+- `pipeline/`：批次状态机；只编排上述能力，不包含平台私有解析规则。
+
+### 2.3 关键设计决策
 
 | 设计点 | 方案 | 理由 |
 |---|---|---|
@@ -72,7 +92,7 @@
 | 插件 ID | 优先 `static platformId` / `static id`，否则使用文件或目录名 | CLI 禁用和日志使用稳定标识 |
 | 故障隔离 | 每个插件独立 import、校验和跳过 | 单个平台损坏不影响其余平台启动 |
 | 临时禁用 | `--disable-platform <id>`，可重复或逗号分隔 | 平台故障时无需删代码即可下线 |
-| 解析器接口 | 返回 `mediaStreams[]`，可附带 `availableStreams`、`mediaAlternatives`、`qualityAudit` | 兼容单流/多流并支持无登录态最高画质审计与降级 |
+| 解析器接口 | 返回 `mediaStreams[]`，可附带 `availableStreams`、`mediaAlternatives`、`qualityAudit` | 兼容单流/多流并支持“无登录态的最高画质”审计与降级 |
 | 结果校验 | `validateParsedVideo()` 在下载前验证标准结构 | 平台私有或残缺数据不会泄漏到核心流程 |
 | 多流合并 | ffmpeg 视频流 copy、音频转 AAC | 兼顾速度与 MP4 播放兼容性 |
 | Bilibili Referer | 下载时设置平台 referer | 符合 B站 CDN 校验要求 |
@@ -184,7 +204,7 @@ mediaStreams: [{
 
 **选流与下载**：
 - 将 `//f.video.weibocdn.com/...` 标准化为 HTTPS
-- 从清晰度标签或 URL `template=WxH` 提取分辨率，选择无登录态可用的最高画质合流 MP4
+- 从清晰度标签或 URL `template=WxH` 提取分辨率，选择无登录态的最高画质合流 MP4
 - 下载时使用微博规范视频页作为 Referer
 - CDN URL 带短时签名，失败重试时应重新解析；无登录态访客验证可能需要稍后重试或 `--headed`
 
@@ -540,7 +560,7 @@ Python 脚本只做转写（faster-whisper + OpenCC），纯函数，输入 WAV 
 | Bilibili 浏览器拦截获取播放 URL | ✅ 已实现 |
 | Bilibili DASH 多流自动合并 | ✅ 已实现 |
 | Kuaishou 目标作品 Apollo/GraphQL 精确解析 | ✅ 已实现 |
-| Weibo 目标 fid/oid 精确解析与无登录态最高画质 MP4 | ✅ 已实现 |
+| Weibo 目标 fid/oid 精确解析与“无登录态的最高画质”MP4 | ✅ 已实现 |
 | Detail API 元数据提取 | ✅ 已实现 |
 | MP4 下载（默认 1 并发，可配置） | ✅ 已实现 |
 | 失败自动重试（指数退避） | ✅ 已实现 |

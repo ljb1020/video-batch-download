@@ -14,12 +14,17 @@
 
 当文档和代码不一致时，先以这些文件为准，再修正文档：
 
-- CLI 参数和默认值：`scripts/download.mjs`
+- CLI 参数、默认值和帮助文本：`scripts/cli/options.js`
+- 批次编排与退出码：`scripts/pipeline/run-batch.js`
+- 下载和 ffmpeg 行为：`scripts/media/downloader.js`、`scripts/media/ffmpeg.js`
+- 断点续传判断：`scripts/core/resume.js`
+- 输出结构和文件落盘：`scripts/output/writer.js`
 - 支持平台列表：运行时扫描 `scripts/platforms/*.js` 和 `scripts/platforms/<id>/index.js` 的结果
 - 插件发现、禁用和故障隔离：`scripts/platforms/router.js`
 - 平台解析器契约：`scripts/platforms/base.js`
 - 平台解析实现：`scripts/platforms/<platform>.js` 或 `scripts/platforms/<id>/index.js`
-- 转写服务行为：`scripts/transcribe_server.py`
+- 转写服务生命周期：`scripts/transcription/client.js`
+- 转写模型行为：`scripts/transcribe_server.py`
 - skill 触发规则：`SKILL.md`
 
 ## 开发前阅读顺序
@@ -34,19 +39,20 @@
 
 修改 CLI、下载、转写、断点续传或输出流程时，先读：
 
-1. `scripts/download.mjs`
-2. `references/architecture.md`
-3. `SKILL.md`
-4. `README.md`
-5. `README_zh.md`
+1. 对应的 `scripts/cli/`、`scripts/core/`、`scripts/media/`、`scripts/transcription/`、`scripts/output/` 或 `scripts/pipeline/` 模块
+2. `scripts/download.mjs`（仅确认稳定入口未被破坏）
+3. `references/architecture.md`
+4. `SKILL.md`
+5. `README.md`
+6. `README_zh.md`
 
 ## 架构边界
 
 - 平台相关逻辑放在 `scripts/platforms/<platform>.js`；复杂插件也可放在 `scripts/platforms/<id>/index.js` 并在同目录拆分私有模块。
 - URL 匹配规则由插件自己的 `static matchesUrl()` 维护；不要在核心路由中增加平台分支。
 - `scripts/platforms/router.js` 只负责发现、契约校验、禁用、故障隔离和通用路由，不维护静态平台清单。
-- 通用下载、合并、转写、断点续传和输出逻辑放在 `scripts/download.mjs` 或 `scripts/utils/`。
-- 新平台不要把特殊解析逻辑塞进 `scripts/download.mjs`，优先在平台解析器中归一化为 `mediaStreams`。
+- 通用下载、合并、转写、断点续传和输出逻辑分别放在 `scripts/media/`、`scripts/transcription/`、`scripts/core/`、`scripts/output/`，批次状态机放在 `scripts/pipeline/`。
+- `scripts/download.mjs` 只保留 CLI 启动；新平台不要把特殊解析逻辑塞进入口或 pipeline，优先在平台解析器中归一化为 `mediaStreams`。
 - 只有多个平台共同需要的能力，才考虑抽到 `scripts/utils/`。
 
 ## 新增平台流程
@@ -69,7 +75,7 @@
    - `postTime`
    - `duration`
    - `statistics`
-   - `mediaStreams`（当前选中的无登录态最高画质流组）
+   - `mediaStreams`（当前选中的“无登录态的最高画质”流组）
    - `availableStreams`（可选；无登录态下的全部候选，用于审计）
    - `mediaAlternatives`（可选；按画质降序排列的可下载流组）
    - `qualityAudit`（可选；宣传档位、实际可用档位、选择结果与原因）
@@ -125,7 +131,7 @@
 | 变更类型 | 必须同步 |
 |---|---|
 | 新增或移除支持平台 | `README.md`, `README_zh.md`, `SKILL.md`, `examples/usage.md`, `references/architecture.md`, 本文件 |
-| 修改 CLI 参数或默认值 | `scripts/download.mjs`, `README.md`, `README_zh.md`, `SKILL.md`, `examples/usage.md` |
+| 修改 CLI 参数或默认值 | `scripts/cli/options.js`, `README.md`, `README_zh.md`, `SKILL.md`, `examples/usage.md` |
 | 修改插件发现、契约或隔离行为 | `scripts/platforms/router.js`, `scripts/platforms/base.js`, `references/architecture.md`, 本文件 |
 | 修改输出 JSON 结构 | `README.md`, `README_zh.md`, `SKILL.md`, `examples/sample_output.json`, `references/architecture.md` |
 | 修改依赖或环境要求 | `package.json`, `package-lock.json`, `requirements.txt`, `README.md`, `README_zh.md`, `SKILL.md` |

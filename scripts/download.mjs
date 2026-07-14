@@ -19,6 +19,7 @@ import { extractAndRouteUrls, getPlatformId, loadPlatforms } from "./platforms/r
 const TEMP_DIR_NAME = ".temp";
 const AUDIO_PROBE_TIMEOUT_MS = 30_000;
 const FFMPEG_TIMEOUT_MS = 30 * 60_000;
+const QUALITY_SELECTION_VERSION = "anonymous-best-v1";
 
 function usage() {
   console.log(`
@@ -149,10 +150,12 @@ function safePathSegment(value, fallback = "video", maxLen = 80) {
   return (cleaned || fallback).slice(0, maxLen);
 }
 
-function getMediaCacheKey(parsed) {
+function getMediaCacheKey(parsed, alternativeIndex = 0) {
   const platform = safePathSegment(parsed.platform, "platform", 20);
   const videoId = safePathSegment(parsed.videoId, itemKey(parsed.sourceUrl), 50);
-  return `${platform}_${videoId}_${itemKey(parsed.sourceUrl)}`;
+  const policyKey = itemKey(`${QUALITY_SELECTION_VERSION}:${parsed.accessMode ?? "anonymous"}`).slice(0, 8);
+  const alternative = alternativeIndex > 0 ? `_fallback${alternativeIndex}` : "";
+  return `${platform}_${videoId}_${itemKey(parsed.sourceUrl)}_${policyKey}${alternative}`;
 }
 
 function parsePositiveInt(value, option, { allowZero = false } = {}) {
@@ -392,6 +395,34 @@ async function assertPlayableVideo(filePath, ffmpegPath, label) {
   }
 }
 
+async function assertExpectedQuality(filePath, streams, ffmpegPath) {
+  const expected = streams.find((stream) => stream.type === "video" || stream.type === "video+audio");
+  if (!expected) return;
+  const actual = await getVideoInfo(filePath, ffmpegPath);
+  if (!actual) return;
+
+  const expectedPixels = Number(expected.width ?? 0) * Number(expected.height ?? 0);
+  const actualPixels = Number(actual.width ?? 0) * Number(actual.height ?? 0);
+  if (expectedPixels > 0 && actualPixels > 0 && actualPixels < expectedPixels * 0.95) {
+    await fsp.rm(filePath, { force: true }).catch(() => {});
+    throw new Error(
+      `Downloaded resolution ${actual.resolution ?? "unknown"} is below candidate ` +
+      `${expected.width}x${expected.height}`,
+    );
+  }
+
+  const expectedFps = Number(expected.fps ?? 0);
+  if (expectedFps > 0 && actual.fps && actual.fps + 1 < expectedFps) {
+    await fsp.rm(filePath, { force: true }).catch(() => {});
+    throw new Error(`Downloaded frame rate ${actual.fps} is below candidate ${expectedFps}`);
+  }
+
+  if (expected.hdr === true && actual.hdr === false) {
+    await fsp.rm(filePath, { force: true }).catch(() => {});
+    throw new Error("Downloaded stream is not HDR although the selected candidate was HDR");
+  }
+}
+
 async function mergeStreams(videoPath, audioPath, mediaKey, outputDir, ffmpegPath) {
   const mergedPath = path.join(getTempDir(outputDir), `${mediaKey}.mp4`);
   const exe = getFfmpegExecutable(ffmpegPath);
@@ -438,9 +469,8 @@ async function mergeStreams(videoPath, audioPath, mediaKey, outputDir, ffmpegPat
   });
 }
 
-async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
-  const streams = parsed.mediaStreams;
-  const mediaKey = getMediaCacheKey(parsed);
+async function downloadStreamSet(parsed, streams, alternativeIndex, outputDir, timeoutMs, ffmpegPath) {
+  const mediaKey = getMediaCacheKey(parsed, alternativeIndex);
 
   // Single stream (e.g., Douyin or Bilibili durl fallback)
   if (streams.length === 1 && streams[0].type === "video+audio") {
@@ -452,6 +482,7 @@ async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
       timeoutMs
     );
     await assertPlayableVideo(downloaded.filePath, ffmpegPath, "Downloaded video");
+    await assertExpectedQuality(downloaded.filePath, streams, ffmpegPath);
     return downloaded;
   }
 
@@ -484,6 +515,7 @@ async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
 
     // Verify both video and audio tracks exist
     await assertPlayableVideo(mergedPath, ffmpegPath, "Merged video");
+    await assertExpectedQuality(mergedPath, streams, ffmpegPath);
 
     // Clean up intermediate files
     await fsp.rm(videoFile.filePath, { force: true });
@@ -498,6 +530,59 @@ async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
     if (mergedPath) await fsp.rm(mergedPath, { force: true }).catch(() => {});
     throw error;
   }
+}
+
+function normalizeMediaAlternatives(parsed) {
+  const alternatives = Array.isArray(parsed.mediaAlternatives)
+    ? parsed.mediaAlternatives.filter((streams) => Array.isArray(streams) && streams.length > 0)
+    : [];
+  const all = [parsed.mediaStreams, ...alternatives];
+  const seen = new Set();
+  return all.filter((streams) => {
+    if (!Array.isArray(streams) || streams.length === 0) return false;
+    const key = streams.map((stream) => `${stream.type}:${stream.url}`).join("|");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function downloadMedia(parsed, outputDir, timeoutMs, ffmpegPath) {
+  const alternatives = normalizeMediaAlternatives(parsed);
+  const failures = [];
+  for (let index = 0; index < alternatives.length; index += 1) {
+    const streams = alternatives[index];
+    try {
+      const downloaded = await downloadStreamSet(
+        parsed,
+        streams,
+        index,
+        outputDir,
+        timeoutMs,
+        ffmpegPath,
+      );
+      if (index > 0) {
+        parsed.mediaStreams = streams;
+        parsed.qualityAudit = {
+          ...(parsed.qualityAudit ?? {}),
+          selectionReason: `Higher anonymous candidate(s) failed; downloaded fallback ${index + 1}`,
+          fallbackFailures: failures,
+        };
+      }
+      return { ...downloaded, alternativeIndex: index, fallbackFailures: failures };
+    } catch (error) {
+      failures.push({ alternativeIndex: index, error: error.message });
+      if (index + 1 < alternatives.length) {
+        console.warn(`    [quality] candidate ${index + 1} failed, trying next anonymous quality: ${error.message}`);
+      }
+    }
+  }
+  const error = new Error(
+    `All ${alternatives.length} anonymous media candidate set(s) failed: ` +
+      failures.map((failure) => `#${failure.alternativeIndex + 1} ${failure.error}`).join(" | "),
+  );
+  error.candidateFailures = failures;
+  throw error;
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +783,37 @@ async function transcribeAudio(wavPath, options) {
 // Output
 // ---------------------------------------------------------------------------
 
+function sanitizeStreamForOutput(stream) {
+  if (!stream || typeof stream !== "object") return null;
+  const output = {};
+  for (const key of [
+    "type", "format", "width", "height", "fps", "bitrate", "codec", "quality",
+    "label", "source", "totalBytes", "hdr",
+  ]) {
+    if (stream[key] !== undefined && stream[key] !== null) output[key] = stream[key];
+  }
+  if (output.width && output.height) output.resolution = `${output.width}x${output.height}`;
+  return output;
+}
+
+function buildQualityOutput(parsed) {
+  const available = Array.isArray(parsed.availableStreams) && parsed.availableStreams.length > 0
+    ? parsed.availableStreams
+    : parsed.mediaStreams;
+  return {
+    access_mode: parsed.accessMode ?? "anonymous",
+    selection_version: QUALITY_SELECTION_VERSION,
+    available_streams: available.map(sanitizeStreamForOutput).filter(Boolean),
+    selected_streams: parsed.mediaStreams.map(sanitizeStreamForOutput).filter(Boolean),
+    audit: parsed.qualityAudit ?? {
+      advertisedQualities: [],
+      accessibleQualities: [],
+      selectedQuality: null,
+      selectionReason: "Best anonymous stream exposed by the platform parser",
+    },
+  };
+}
+
 function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}) {
   const now = new Date();
   const timeStr = now.toISOString().replace("T", "_").replace(/[:.]/g, "-").slice(0, 19);
@@ -733,6 +849,7 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
     segments: segments,
     transcript_source: tMeta ? "faster-whisper" : null,
     transcription: tMeta,
+    quality: buildQualityOutput(parsed),
     media_info: null, // Will be filled by ffprobe
     output_file: jsonPath,
     transcript_file: txtPath,
@@ -894,6 +1011,7 @@ async function main() {
   const parseSemaphore = new Semaphore(options.parseConcurrency);
   const downloadSemaphore = new Semaphore(options.downloadConcurrency);
   const browserManager = new BrowserManager(options.headed);
+  const accessMode = options.storageState ? "provided-storage-state" : "anonymous";
   const results = [];
   let stopping = false;
 
@@ -924,7 +1042,13 @@ async function main() {
 
   async function processDownload({ url, ParserClass }, index) {
     const label = `[${index + 1}/${urlsWithParsers.length}]`;
-    const previous = store.get(url);
+    const stored = store.get(url);
+    const previous = stored?.selectionVersion === QUALITY_SELECTION_VERSION && stored?.accessMode === accessMode
+      ? stored
+      : null;
+    if (stored && !previous) {
+      console.error(`${label} cached result uses a different access mode or quality selector; reparsing for best available quality`);
+    }
     if (await hasReusableJsonOutput(previous)) {
       const transcriptOk = !options.transcribe || await hasReusableTranscriptOutput(previous);
       let videoOk = !options.videoOutput || await hasReusableVideoOutput(previous);
@@ -987,7 +1111,13 @@ async function main() {
     let attempt = 0;
     while (!stopping && (options.maxAttempts === 0 || attempt < options.maxAttempts)) {
       attempt += 1;
-      await store.update(url, { status: "parsing", attempt, lastError: null });
+      await store.update(url, {
+        status: "parsing",
+        attempt,
+        lastError: null,
+        selectionVersion: QUALITY_SELECTION_VERSION,
+        accessMode,
+      });
       console.error(`${label} parse attempt ${attempt}${options.maxAttempts ? `/${options.maxAttempts}` : ""}: ${url}`);
 
       try {
@@ -997,6 +1127,7 @@ async function main() {
           await parseSemaphore.use(() => parser.parse(browserManager, url, options)),
           getPlatformId(ParserClass),
         );
+        parsed.accessMode = accessMode;
 
         await store.update(url, {
           status: "downloading",
@@ -1017,6 +1148,10 @@ async function main() {
           cacheVideoPath: downloaded.filePath,
           bytes: downloaded.bytes,
           parsed,
+          selectedAlternativeIndex: downloaded.alternativeIndex,
+          candidateFailures: downloaded.fallbackFailures,
+          selectionVersion: QUALITY_SELECTION_VERSION,
+          accessMode,
           lastError: null,
         });
 
@@ -1261,6 +1396,8 @@ async function main() {
     stateFile: store.file,
     videoOutput: options.videoOutput,
     videoPolicy: options.videoOutput ? "item" : "temp",
+    accessMode,
+    qualitySelectionVersion: QUALITY_SELECTION_VERSION,
     videosOutput: finalResults.filter((r) => r.videoOutput && r.videoFile).length,
     videosInCache: finalResults.filter((r) => r.cacheVideoFile).length,
     transcribe: options.transcribe

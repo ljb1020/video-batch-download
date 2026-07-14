@@ -27,13 +27,21 @@ export class XiaohongshuParser extends PlatformParser {
     let noteApiData = null;
     let permanentReason = null;
     const mediaCandidates = [];
+    const responseTasks = new Set();
+    let closing = false;
 
     const addMediaCandidate = (candidate) => {
-      if (!candidate.url || mediaCandidates.some((item) => item.url === candidate.url)) return;
+      if (!candidate.url) return;
+      const existing = mediaCandidates.find((item) => item.url === candidate.url);
+      if (existing) {
+        Object.assign(existing, Object.fromEntries(Object.entries(candidate).filter(([, value]) => value != null && value !== 0)));
+        return;
+      }
       mediaCandidates.push(candidate);
     };
 
-    page.on("response", async (response) => {
+    const handleResponse = (response) => {
+      const task = (async () => {
       const responseUrl = response.url();
       const headers = response.headers();
       const contentType = headers["content-type"] ?? "";
@@ -54,7 +62,7 @@ export class XiaohongshuParser extends PlatformParser {
           } else if (!json.success) {
             permanentReason = `Xiaohongshu feed API error: ${json.msg ?? "unknown"}`;
           }
-        } catch (e) { console.warn(`[xiaohongshu] failed to parse feed API response: ${e.message}`); }
+        } catch (e) { if (!closing) console.warn(`[xiaohongshu] failed to parse feed API response: ${e.message}`); }
       }
 
       // Intercept note API
@@ -64,9 +72,15 @@ export class XiaohongshuParser extends PlatformParser {
           if (json.success && json.data) {
             noteApiData = json.data;
           }
-        } catch (e) { console.warn(`[xiaohongshu] failed to parse note API response: ${e.message}`); }
+        } catch (e) { if (!closing) console.warn(`[xiaohongshu] failed to parse note API response: ${e.message}`); }
       }
-    });
+      })().catch((error) => {
+        if (!closing) console.warn(`[xiaohongshu] response handler failed: ${error.message}`);
+      });
+      responseTasks.add(task);
+      task.finally(() => responseTasks.delete(task));
+    };
+    page.on("response", handleResponse);
 
     try {
       await page.goto(url, {
@@ -108,7 +122,7 @@ export class XiaohongshuParser extends PlatformParser {
       const pageState = await this._extractNoteFromPage(page, targetNoteId);
       const apiNote = this._extractNoteFromApi(feedApiData, noteApiData, targetNoteId);
       let noteData = pageState ?? apiNote;
-      const bestMediaCandidate = this._selectBestCdnCandidate(mediaCandidates);
+      let bestMediaCandidate = this._selectBestCdnCandidate(mediaCandidates);
 
       if (!noteData && bestMediaCandidate) {
         noteData = {
@@ -126,8 +140,12 @@ export class XiaohongshuParser extends PlatformParser {
         throw error;
       }
 
-      // 提取视频 URL
-      const videoUrl = this._extractVideoUrl(noteData) ?? bestMediaCandidate?.url ?? null;
+      for (const candidate of this._collectNoteMediaCandidates(noteData)) {
+        addMediaCandidate(candidate);
+      }
+      const availableStreams = this._normalizeAvailableStreams(mediaCandidates, "https://www.xiaohongshu.com/");
+      bestMediaCandidate = availableStreams[0] ?? bestMediaCandidate;
+      const videoUrl = bestMediaCandidate?.url ?? null;
 
       // 判断是否为视频笔记
       const noteType = noteData.type ?? noteData.noteType ?? "";
@@ -169,6 +187,7 @@ export class XiaohongshuParser extends PlatformParser {
 
       const videoInfo = noteData.video ?? {};
       const duration = videoInfo.duration ?? videoInfo.dur ?? null;
+      const mediaAlternatives = availableStreams.map((stream) => [{ ...stream }]);
 
       return {
         platform: XiaohongshuParser.getPlatformName(),
@@ -182,16 +201,15 @@ export class XiaohongshuParser extends PlatformParser {
         duration: this._normalizeDuration(duration),
         statistics,
         referer: "https://www.xiaohongshu.com/",
-        mediaStreams: [
-          {
-            url: videoUrl,
-            type: "video+audio",
-            format: "mp4",
-            referer: "https://www.xiaohongshu.com/",
-          },
-        ],
+        availableStreams,
+        qualityAudit: this._buildQualityAudit(availableStreams, availableStreams[0]),
+        mediaAlternatives,
+        mediaStreams: mediaAlternatives[0],
       };
     } finally {
+      closing = true;
+      page.off("response", handleResponse);
+      await settleWithin(Promise.allSettled([...responseTasks]), 5_000);
       await settleWithin(context.close(), 5_000);
     }
   }
@@ -308,37 +326,47 @@ export class XiaohongshuParser extends PlatformParser {
    * Extract video CDN URL from note data.
    */
   _extractVideoUrl(noteData) {
-    const video = noteData.video ?? {};
-    const media = video.media ?? {};
+    return this._collectNoteMediaCandidates(noteData)[0]?.url ?? null;
+  }
 
-    // Try stream URLs from video.media.stream. Prefer h264 for broad ffmpeg/device
-    // compatibility, then fall back to h265/av1/h266 if needed.
-    const stream = media.stream ?? {};
+  _collectNoteMediaCandidates(noteData) {
+    const video = noteData?.video ?? {};
+    const stream = video.media?.stream ?? {};
     const candidates = [
       ...this._tagStreams(stream.h264, "h264"),
       ...this._tagStreams(stream.h265, "h265"),
       ...this._tagStreams(stream.av1, "av1"),
       ...this._tagStreams(stream.h266, "h266"),
-    ];
-    const best = this._selectBestStream(candidates);
-    if (best?.url) return best.url;
+    ].map((item) => ({
+      url: this._streamUrl(item),
+      width: item.width ?? null,
+      height: item.height ?? null,
+      fps: item.fps ?? item.frameRate ?? null,
+      bitrate: item.avgBitrate ?? item.videoBitrate ?? item.bitrate ?? null,
+      totalBytes: item.size ?? item.fileSize ?? null,
+      codec: item._codec,
+      quality: item.qualityType ?? item.quality ?? item.height ?? null,
+      label: item.qualityLabel ?? item.name ?? null,
+      source: `note-stream-${item._codec}`,
+    }));
 
-    // Try video.consumer.originVideoKey or video.url
     const originKey = video.consumer?.originVideoKey ?? video.originVideoKey;
     if (originKey) {
-      // originKey is a relative key, construct CDN URL
-      if (/^https?:\/\//.test(originKey)) return originKey;
-      return `https://sns-video-bd.xhscdn.com/${originKey.replace(/^\//, "")}`;
+      candidates.push({
+        url: /^https?:\/\//.test(originKey) ? originKey : `https://sns-video-bd.xhscdn.com/${originKey.replace(/^\//, "")}`,
+        source: "origin-video-key",
+      });
     }
 
-    // Try direct URL on the video object
     const directUrl = video.url ?? video.downloadUrl;
     if (directUrl && /xhscdn\.com/i.test(directUrl)) {
-      return directUrl;
+      candidates.push({ url: directUrl, source: "direct-video-url" });
     }
 
-    // Recursively search for xhscdn.com URLs
-    return this._findCdnUrl(noteData);
+    const discoveredUrl = this._findCdnUrl(noteData);
+    if (discoveredUrl) candidates.push({ url: discoveredUrl, source: "recursive-note-search" });
+    const unique = [...new Map(candidates.filter((item) => item.url).map((item) => [item.url, item])).values()];
+    return unique.sort((a, b) => this._compareCandidates(a, b));
   }
 
   _tagStreams(streams, codec) {
@@ -355,18 +383,19 @@ export class XiaohongshuParser extends PlatformParser {
     const scored = streams
       .map((stream) => ({ stream, url: this._streamUrl(stream), score: this._streamScore(stream) }))
       .filter((item) => item.url && /xhscdn\.com/i.test(item.url));
-    scored.sort((a, b) => b.score - a.score);
+    scored.sort((a, b) => this._compareCandidates(a.stream, b.stream));
     return scored[0] ?? null;
   }
 
   _streamScore(stream) {
-    const codecScore = { h264: 4, h265: 3, av1: 2, h266: 1 }[stream?._codec] ?? 0;
     const width = Number(stream?.width ?? 0);
     const height = Number(stream?.height ?? 0);
     const pixels = width * height;
+    const fps = this._normalizeFps(stream?.fps ?? stream?.frameRate);
     const bitrate = Number(stream?.avgBitrate ?? stream?.videoBitrate ?? 0);
     const size = Number(stream?.size ?? 0);
-    return codecScore * 1_000_000_000_000 + pixels * 1_000 + bitrate + Math.min(size, 1_000_000_000) / 1_000;
+    const codecScore = /^(?:h264|avc)$/i.test(stream?._codec ?? stream?.codec ?? "") ? 1 : 0;
+    return pixels * 1e9 + fps * 1e6 + bitrate + Math.min(size, 1_000_000_000) / 1_000 + codecScore / 100;
   }
 
   _selectBestCdnCandidate(candidates) {
@@ -376,8 +405,70 @@ export class XiaohongshuParser extends PlatformParser {
         candidate,
         score: Number(candidate.totalBytes ?? 0) + (candidate.url.includes("sns-video") ? 1_000 : 0),
       }));
-    scored.sort((a, b) => b.score - a.score);
+    scored.sort((a, b) => this._compareCandidates(a.candidate, b.candidate));
     return scored[0]?.candidate ?? null;
+  }
+
+  _normalizeFps(value) {
+    if (typeof value === "string" && value.includes("/")) {
+      const [numerator, denominator] = value.split("/").map(Number);
+      return denominator ? numerator / denominator : 0;
+    }
+    const fps = Number(value ?? 0);
+    return Number.isFinite(fps) ? fps : 0;
+  }
+
+  _compareCandidates(a, b) {
+    const differences = [
+      Number(b.width ?? 0) * Number(b.height ?? 0) - Number(a.width ?? 0) * Number(a.height ?? 0),
+      this._normalizeFps(b.fps ?? b.frameRate) - this._normalizeFps(a.fps ?? a.frameRate),
+      Number(b.bitrate ?? b.avgBitrate ?? b.videoBitrate ?? 0) - Number(a.bitrate ?? a.avgBitrate ?? a.videoBitrate ?? 0),
+      Number(b.totalBytes ?? b.size ?? b.fileSize ?? 0) - Number(a.totalBytes ?? a.size ?? a.fileSize ?? 0),
+      (/^(?:h264|avc)$/i.test(b.codec ?? b._codec ?? "") ? 1 : 0) - (/^(?:h264|avc)$/i.test(a.codec ?? a._codec ?? "") ? 1 : 0),
+      (/note-stream/i.test(b.source ?? "") ? 1 : 0) - (/note-stream/i.test(a.source ?? "") ? 1 : 0),
+    ];
+    return differences.find((difference) => difference !== 0) ?? 0;
+  }
+
+  _normalizeAvailableStreams(candidates, referer) {
+    const unique = new Map();
+    for (const candidate of candidates) {
+      if (!candidate?.url || !this._isVideoCdnUrl(candidate.url) || unique.has(candidate.url)) continue;
+      const width = Number(candidate.width) || null;
+      const height = Number(candidate.height) || null;
+      const fps = this._normalizeFps(candidate.fps ?? candidate.frameRate) || null;
+      const bitrate = Number(candidate.bitrate ?? candidate.avgBitrate ?? candidate.videoBitrate) || null;
+      const totalBytes = Number(candidate.totalBytes ?? candidate.size ?? candidate.fileSize) || null;
+      const quality = candidate.quality ?? height;
+      const label = candidate.label ?? (width && height ? `${width}x${height}${fps ? `@${fps}` : ""}` : null);
+      unique.set(candidate.url, {
+        url: candidate.url,
+        type: "video+audio",
+        format: "mp4",
+        width,
+        height,
+        fps,
+        bitrate,
+        codec: candidate.codec ?? candidate._codec ?? null,
+        quality,
+        label,
+        source: candidate.source ?? null,
+        totalBytes,
+        referer,
+      });
+    }
+    return [...unique.values()].sort((a, b) => this._compareCandidates(a, b));
+  }
+
+  _buildQualityAudit(availableStreams, selected) {
+    const qualities = [...new Set(availableStreams.map((stream) => stream.label ?? stream.quality).filter(Boolean))];
+    return {
+      advertisedQualities: qualities,
+      accessibleQualities: qualities,
+      selectedQuality: selected?.label ?? selected?.quality ?? null,
+      selectionReason: "highest anonymous stream by resolution, frame rate, bitrate, and size; codec/source only break quality ties",
+      limitedBy: null,
+    };
   }
 
   _isVideoCdnUrl(url) {

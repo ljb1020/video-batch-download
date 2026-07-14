@@ -6,6 +6,29 @@ const URL_PATTERNS = [
   /^https?:\/\/b23\.tv\//i,
 ];
 
+const QUALITY_LABELS = new Map([
+  [127, "8K"], [126, "杜比视界"], [125, "HDR"], [120, "4K"],
+  [116, "1080P60"], [112, "1080P+"], [80, "1080P"], [74, "720P60"],
+  [64, "720P"], [32, "480P"], [16, "360P"], [6, "240P"],
+]);
+
+function numericFps(value) {
+  if (Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const [numerator, denominator = "1"] = value.split("/").map(Number);
+  return Number.isFinite(numerator) && Number.isFinite(denominator) && denominator !== 0
+    ? numerator / denominator
+    : null;
+}
+
+function qualityLabel(quality, formatInfo) {
+  return formatInfo?.new_description
+    ?? formatInfo?.display_desc
+    ?? formatInfo?.description
+    ?? QUALITY_LABELS.get(Number(quality))
+    ?? (quality != null ? `QN${quality}` : null);
+}
+
 export class BilibiliParser extends PlatformParser {
   static getPlatformName() {
     return "B站";
@@ -24,6 +47,7 @@ export class BilibiliParser extends PlatformParser {
 
     let viewApiData = null;
     let playurlApiData = null;
+    const observedPlayurlData = [];
     let permanentReason = null;
 
     page.on("response", async (response) => {
@@ -47,6 +71,7 @@ export class BilibiliParser extends PlatformParser {
           const json = await response.json();
           if (json.code === 0 && json.data) {
             playurlApiData = json.data;
+            observedPlayurlData.push(json.data);
           }
         } catch (e) { console.warn(`[bilibili] failed to parse playurl API response: ${e.message}`); }
       }
@@ -106,12 +131,19 @@ export class BilibiliParser extends PlatformParser {
         throw error;
       }
 
-      if (!playurlApiData) {
-        playurlApiData = await this._extractPlayinfoFromPage(page);
+      const pagePlayinfo = await this._extractPlayinfoFromPage(page);
+      if (pagePlayinfo) {
+        observedPlayurlData.push(pagePlayinfo);
+        playurlApiData ??= pagePlayinfo;
       }
 
-      if (!playurlApiData) {
-        playurlApiData = await this._fetchPlayurlFallback(page, viewApiData, url);
+      // The player may initially request a bandwidth-adaptive, lower quality stream.
+      // Always express the highest quality intent and trust the anonymous API response
+      // to define what is actually accessible.
+      const highestPlayurlData = await this._fetchPlayurlFallback(page, viewApiData, url);
+      if (highestPlayurlData) {
+        observedPlayurlData.push(highestPlayurlData);
+        playurlApiData = highestPlayurlData;
       }
 
       if (!playurlApiData) {
@@ -150,8 +182,10 @@ export class BilibiliParser extends PlatformParser {
         reply_count: viewApiData.stat?.reply ?? null,
       };
 
-      // Parse media streams
-      const mediaStreams = this._extractMediaStreams(playurlApiData);
+      const availableStreams = this._extractAvailableStreams(playurlApiData)
+        .map((stream) => ({ ...stream, referer: "https://www.bilibili.com/" }));
+      const mediaAlternatives = this._buildMediaAlternatives(availableStreams);
+      const mediaStreams = mediaAlternatives[0] ?? [];
 
       if (mediaStreams.length === 0) {
         throw new Error("No valid media streams found");
@@ -169,7 +203,10 @@ export class BilibiliParser extends PlatformParser {
         duration: viewApiData.duration ?? null,
         statistics,
         referer: "https://www.bilibili.com/",
-        mediaStreams: mediaStreams.map((s) => ({ ...s, referer: "https://www.bilibili.com/" })),
+        mediaStreams,
+        mediaAlternatives,
+        availableStreams,
+        qualityAudit: this._buildQualityAudit(observedPlayurlData, availableStreams, mediaStreams),
       };
     } finally {
       await settleWithin(context.close(), 5_000);
@@ -223,9 +260,9 @@ export class BilibiliParser extends PlatformParser {
     if (!cid || (!bvid && aid == null)) return null;
 
     const variants = [
-      { qn: "80", fnval: "4048" },
-      { qn: "80", fnval: "16" },
-      { qn: "80", fnval: "0" },
+      { qn: "127", fnval: "4048" },
+      { qn: "127", fnval: "16" },
+      { qn: "127", fnval: "0" },
     ];
 
     for (const variant of variants) {
@@ -253,58 +290,140 @@ export class BilibiliParser extends PlatformParser {
   }
 
   _extractMediaStreams(playurlData) {
+    return this._buildMediaAlternatives(this._extractAvailableStreams(playurlData))[0] ?? [];
+  }
+
+  _extractAvailableStreams(playurlData) {
     const streams = [];
+    const formatByQuality = new Map(
+      (playurlData?.support_formats ?? []).map((format) => [Number(format.quality), format]),
+    );
+    const dash = playurlData?.dash;
 
-    // Try DASH format first (most common, higher quality)
-    if (playurlData.dash) {
-      const dash = playurlData.dash;
+    for (const video of dash?.video ?? []) {
+      const url = video.baseUrl ?? video.base_url;
+      if (!url) continue;
+      streams.push({
+        url,
+        type: "video",
+        format: "m4s",
+        width: video.width ?? null,
+        height: video.height ?? null,
+        fps: numericFps(video.frameRate ?? video.frame_rate),
+        bitrate: video.bandwidth ?? null,
+        codec: video.codecs ?? (video.codecid != null ? String(video.codecid) : null),
+        quality: video.id ?? null,
+        label: qualityLabel(video.id, formatByQuality.get(Number(video.id))),
+        source: "dash.video",
+        totalBytes: video.size ?? null,
+      });
+    }
 
-      // Get video stream (highest quality by default)
-      if (dash.video && dash.video.length > 0) {
-        // Sort by quality descending
-        const sortedVideo = [...dash.video].sort((a, b) => (b.id ?? 0) - (a.id ?? 0));
-        const videoStream = sortedVideo[0];
-        const videoUrl = videoStream.baseUrl ?? videoStream.base_url;
-        if (videoUrl) {
-          streams.push({
-            url: videoUrl,
-            type: "video",
-            format: "m4s",
-            quality: videoStream.height ?? null,
-          });
-        }
-      }
-
-      // Get audio stream
-      if (dash.audio && dash.audio.length > 0) {
-        const audioStream = dash.audio[0];
-        const audioUrl = audioStream.baseUrl ?? audioStream.base_url;
-        if (audioUrl) {
-          streams.push({
-            url: audioUrl,
-            type: "audio",
-            format: "m4s",
-          });
-        }
-      }
-
-      if (streams.length === 2) {
-        return streams;
+    const audioGroups = [
+      [dash?.audio ?? [], "dash.audio"],
+      [Array.isArray(dash?.dolby?.audio) ? dash.dolby.audio : dash?.dolby?.audio ? [dash.dolby.audio] : [], "dash.dolby.audio"],
+      [Array.isArray(dash?.flac?.audio) ? dash.flac.audio : dash?.flac?.audio ? [dash.flac.audio] : [], "dash.flac.audio"],
+    ];
+    for (const [audios, source] of audioGroups) {
+      for (const audio of audios) {
+        const url = audio.baseUrl ?? audio.base_url;
+        if (!url) continue;
+        streams.push({
+          url,
+          type: "audio",
+          format: "m4s",
+          width: null,
+          height: null,
+          fps: null,
+          bitrate: audio.bandwidth ?? null,
+          codec: audio.codecs ?? (audio.codecid != null ? String(audio.codecid) : null),
+          quality: audio.id ?? null,
+          label: source === "dash.flac.audio" ? "Hi-Res无损" : source === "dash.dolby.audio" ? "杜比音频" : null,
+          source,
+          totalBytes: audio.size ?? null,
+        });
       }
     }
 
-    // Fallback to legacy durl format (single merged MP4, lower quality)
-    if (playurlData.durl && playurlData.durl.length > 0) {
-      const durl = playurlData.durl[0];
-      return [
-        {
-          url: durl.url,
-          type: "video+audio",
-          format: "mp4",
-        },
-      ];
+    for (const durl of playurlData?.durl ?? []) {
+      if (!durl?.url) continue;
+      streams.push({
+        url: durl.url,
+        type: "video+audio",
+        format: "mp4",
+        width: playurlData.width ?? null,
+        height: playurlData.height ?? null,
+        fps: numericFps(playurlData.frame_rate),
+        bitrate: playurlData.bandwidth ?? null,
+        codec: null,
+        quality: playurlData.quality ?? null,
+        label: qualityLabel(playurlData.quality, formatByQuality.get(Number(playurlData.quality))),
+        source: "durl",
+        totalBytes: durl.size ?? null,
+      });
+    }
+    return streams;
+  }
+
+  _videoRank(stream) {
+    return [
+      (Number(stream.width) || 0) * (Number(stream.height) || 0),
+      Number(stream.quality) || 0,
+      Number(stream.fps) || 0,
+      Number(stream.bitrate) || 0,
+      Number(stream.totalBytes) || 0,
+    ];
+  }
+
+  _compareVideoStreams(a, b) {
+    const rankA = this._videoRank(a);
+    const rankB = this._videoRank(b);
+    for (let index = 0; index < rankA.length; index += 1) {
+      if (rankA[index] !== rankB[index]) return rankB[index] - rankA[index];
+    }
+    return 0;
+  }
+
+  _buildMediaAlternatives(availableStreams) {
+    const videos = availableStreams.filter((stream) => stream.type === "video")
+      .sort((a, b) => this._compareVideoStreams(a, b));
+    const bestAudio = availableStreams.filter((stream) => stream.type === "audio")
+      .sort((a, b) => (Number(b.bitrate) || 0) - (Number(a.bitrate) || 0))[0];
+    if (videos.length > 0 && bestAudio) return videos.map((video) => [video, bestAudio]);
+
+    return availableStreams.filter((stream) => stream.type === "video+audio")
+      .sort((a, b) => this._compareVideoStreams(a, b))
+      .map((stream) => [stream]);
+  }
+
+  _buildQualityAudit(playurlDataList, availableStreams, selectedStreams) {
+    const advertised = new Map();
+    for (const data of playurlDataList) {
+      const formats = new Map((data?.support_formats ?? []).map((format) => [Number(format.quality), format]));
+      const qualities = new Set([...(data?.accept_quality ?? []), ...formats.keys()]);
+      for (const quality of qualities) {
+        advertised.set(Number(quality), qualityLabel(quality, formats.get(Number(quality))));
+      }
     }
 
-    return [];
+    const accessible = new Map();
+    for (const stream of availableStreams.filter((candidate) => candidate.type !== "audio")) {
+      accessible.set(Number(stream.quality) || 0, stream.label ?? qualityLabel(stream.quality));
+    }
+    const advertisedQualities = [...advertised].sort((a, b) => b[0] - a[0]).map(([, label]) => label);
+    const accessibleQualities = [...accessible].sort((a, b) => b[0] - a[0]).map(([, label]) => label);
+    const selectedVideo = selectedStreams.find((stream) => stream.type !== "audio") ?? null;
+    const highestAdvertised = Math.max(0, ...advertised.keys());
+    const highestAccessible = Math.max(0, ...accessible.keys());
+
+    return {
+      advertisedQualities,
+      accessibleQualities,
+      selectedQuality: selectedVideo?.label ?? qualityLabel(selectedVideo?.quality),
+      selectionReason: selectedVideo
+        ? "Selected the highest-quality stream actually returned to the anonymous session; audio uses the highest available bitrate."
+        : "No selectable stream was returned.",
+      ...(highestAdvertised > highestAccessible ? { limitedBy: "anonymous_platform_access" } : {}),
+    };
   }
 }

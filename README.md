@@ -34,10 +34,12 @@
 - **Browser-based extraction** — captures media URLs via Playwright, without yt-dlp or third-party parsing APIs.
 - **Local transcription** — uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) to generate transcripts without cloud APIs; optional Traditional→Simplified conversion via [OpenCC](https://github.com/BYVoid/OpenCC).
 - **Structured output** — saves metadata, transcript text, and JSON output locally.
+- **Highest quality available without login** — enumerates streams actually accessible without an account session, selects the best candidate, and records why it was selected or downgraded.
 - **Separated stream support** — downloads and merges separated video/audio streams with ffmpeg for Bilibili and Douyin when needed.
 - **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Kuaishou/Xiaohongshu/Weibo reliability.
 - **Pluggable platform adapters** — discovers adapters at runtime, validates their shared contract, and isolates a broken adapter so other platforms can keep working.
 - **Media track validation** — treats an item as completed only after the final MP4 has both video and audio tracks.
+- **Output quality validation** — verifies resolution, frame rate, codec, and HDR with ffprobe, then falls back in quality order when the best candidate fails.
 - **Resumable workflow** — reruns can skip completed downloads and existing transcripts; failed items auto-retry with exponential backoff.
 - **Agent Skill ready** — can be installed as a Claude/Codex-style assistant skill.
 
@@ -58,10 +60,11 @@ Additional practical limits:
 - CPU transcription: ~12 seconds per minute of audio (GPU: ~0.4 seconds)
 - Some videos may require verification challenges — use `--headed` mode
 - Bilibili high-quality videos require ffmpeg for DASH stream merging
+- “Highest quality available without login” means the best stream exposed without an account session, not signed-in/member/upload-original quality; Bilibili may expose only 480P without login
 - Douyin may return separated video/audio streams; audio-only resources are rejected instead of being saved as videos
 - Xiaohongshu image/text notes are not supported (video notes only); public video notes can still work when a login overlay is shown
 - Kuaishou matches Apollo/GraphQL detail data by the redirected photo ID to avoid downloading recommendation feeds; risk-control pages may require a later retry or headed mode
-- Weibo supports public `video.weibo.com/show?fid=1034:...` and `weibo.com/tv/show/1034:...` videos. Anonymous visitor checks or expiring CDN URLs may require a retry or `--headed` mode
+- Weibo supports public `video.weibo.com/show?fid=1034:...` and `weibo.com/tv/show/1034:...` videos. Visitor checks without login or expiring CDN URLs may require a retry or `--headed` mode
 - Short share links may expire or redirect to unrelated feed pages; use canonical URLs when available
 - Transcription is speech-only; on-screen text is not captured
 
@@ -277,6 +280,21 @@ Rerun with the same output directory to resume from `download-state.json`.
 		"device": "cuda",
 		"compute_type": "float16"
 	},
+	"quality": {
+		"access_mode": "anonymous",
+		"selection_version": "anonymous-best-v1",
+		"available_streams": [
+			{"type": "video+audio", "resolution": "1080x1920", "quality": 1080}
+		],
+		"selected_streams": [
+			{"type": "video+audio", "resolution": "1080x1920", "quality": 1080}
+		],
+		"audit": {
+			"accessibleQualities": ["1080P", "720P"],
+			"selectedQuality": "1080P",
+			"selectionReason": "Highest quality available without login"
+		}
+	},
 	"media_info": {
 		"width": 1080,
 		"height": 1920,
@@ -365,7 +383,7 @@ After changing platform plugins, routing, or the normalized output contract, run
 npm test
 ```
 
-The tests cover plugin discovery, disabling and failure isolation, URL routing, and normalized parser-result validation. They do not download real videos.
+The tests cover plugin discovery, disabling and failure isolation, URL routing, normalized parser-result validation, and per-platform quality ordering without login. They do not download real videos.
 
 ## Reference Docs
 

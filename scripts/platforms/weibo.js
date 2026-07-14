@@ -147,6 +147,24 @@ export class WeiboParser extends PlatformParser {
       const canonicalUrl = `https://weibo.com/tv/show/${targetOid}`;
       const referer = canonicalUrl;
       const authorId = playInfo?.author_id ?? playInfo?.user?.id ?? null;
+      const toStream = (candidate) => ({
+        url: candidate.url,
+        type: "video+audio",
+        format: "mp4",
+        width: candidate.width || null,
+        height: candidate.height || null,
+        quality: candidate.quality || Math.min(candidate.width || 0, candidate.height || 0) || null,
+        label: candidate.label ?? null,
+        source: candidate.source ?? null,
+        totalBytes: candidate.totalBytes || null,
+        referer,
+      });
+      const availableStreams = candidates.map(toStream);
+      const mediaAlternatives = availableStreams.map((stream) => [stream]);
+      const advertisedQualities = Object.keys(playInfo?.urls ?? {});
+      const accessibleQualities = [...new Set(candidates.map((candidate) =>
+        candidate.label || (candidate.quality ? `${candidate.quality}P` : null)
+      ).filter(Boolean))];
 
       return {
         platform: WeiboParser.getPlatformName(),
@@ -169,13 +187,16 @@ export class WeiboParser extends PlatformParser {
           share_count: this._normalizeCount(playInfo?.reposts_count),
         },
         referer,
-        mediaStreams: [{
-          url: best.url,
-          type: "video+audio",
-          format: "mp4",
-          quality: best.quality || Math.max(best.width, best.height) || null,
-          referer,
-        }],
+        mediaStreams: [toStream(best)],
+        mediaAlternatives,
+        availableStreams,
+        qualityAudit: {
+          advertisedQualities,
+          accessibleQualities,
+          selectedQuality: best.label || (best.quality ? `${best.quality}P` : null),
+          selectionReason: "Highest-resolution muxed MP4 exposed to the anonymous Weibo session",
+          limitedBy: null,
+        },
       };
     } finally {
       await settleWithin(context.close(), 5_000);

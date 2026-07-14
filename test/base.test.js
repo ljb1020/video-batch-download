@@ -52,6 +52,26 @@ test("validateParsedVideo accepts normalized split video and audio streams", () 
   assert.equal(validateParsedVideo(parsed, "fixture"), parsed);
 });
 
+test("validateParsedVideo accepts quality audit candidates and download alternatives", () => {
+  const parsed = parsedVideo([
+    { url: "https://media.test/1080.mp4", type: "video+audio", format: "mp4", quality: 1080 },
+  ]);
+  parsed.availableStreams = [
+    ...parsed.mediaStreams,
+    { url: "https://media.test/720.mp4", type: "video+audio", format: "mp4", quality: 720 },
+  ];
+  parsed.mediaAlternatives = [
+    [{ url: "https://media.test/720.mp4", type: "video+audio", format: "mp4", quality: 720 }],
+  ];
+  parsed.qualityAudit = {
+    accessibleQualities: ["1080P", "720P"],
+    selectedQuality: "1080P",
+    selectionReason: "Highest anonymous resolution",
+  };
+
+  assert.equal(validateParsedVideo(parsed, "fixture"), parsed);
+});
+
 test("validateParsedVideo rejects invalid normalized results with a permanent platform error", () => {
   const invalidCases = [
     ["non-object", null, /expected an object/],

@@ -139,23 +139,50 @@ export function validateParsedVideo(parsed, pluginId = "unknown") {
     fail("mediaStreams must be a non-empty array");
   }
 
-  const streamTypes = new Set();
-  for (const [index, stream] of parsed.mediaStreams.entries()) {
-    if (!stream || typeof stream !== "object") fail(`mediaStreams[${index}] must be an object`);
+  const validateStream = (stream, location) => {
+    if (!stream || typeof stream !== "object") fail(`${location} must be an object`);
     if (!/^https?:\/\//i.test(stream.url ?? "")) {
-      fail(`mediaStreams[${index}].url must be an absolute HTTP(S) URL`);
+      fail(`${location}.url must be an absolute HTTP(S) URL`);
     }
     if (!["video+audio", "video", "audio"].includes(stream.type)) {
-      fail(`mediaStreams[${index}].type is unsupported`);
+      fail(`${location}.type is unsupported`);
     }
     if (!["mp4", "m4s"].includes(stream.format)) {
-      fail(`mediaStreams[${index}].format is unsupported`);
+      fail(`${location}.format is unsupported`);
     }
-    streamTypes.add(stream.type);
+  };
+  const validateStreamSet = (streams, location) => {
+    if (!Array.isArray(streams) || streams.length === 0) fail(`${location} must be a non-empty array`);
+    const streamTypes = new Set();
+    for (const [index, stream] of streams.entries()) {
+      validateStream(stream, `${location}[${index}]`);
+      streamTypes.add(stream.type);
+    }
+    if (!streamTypes.has("video+audio") && !(streamTypes.has("video") && streamTypes.has("audio"))) {
+      fail(`${location} must contain a muxed stream or a video/audio pair`);
+    }
+  };
+
+  validateStreamSet(parsed.mediaStreams, "mediaStreams");
+
+  if (parsed.availableStreams != null) {
+    if (!Array.isArray(parsed.availableStreams)) fail("availableStreams must be an array");
+    for (const [index, stream] of parsed.availableStreams.entries()) {
+      validateStream(stream, `availableStreams[${index}]`);
+    }
   }
 
-  if (!streamTypes.has("video+audio") && !(streamTypes.has("video") && streamTypes.has("audio"))) {
-    fail("mediaStreams must contain a muxed stream or a video/audio pair");
+  if (parsed.mediaAlternatives != null) {
+    if (!Array.isArray(parsed.mediaAlternatives)) fail("mediaAlternatives must be an array");
+    for (const [index, streams] of parsed.mediaAlternatives.entries()) {
+      validateStreamSet(streams, `mediaAlternatives[${index}]`);
+    }
+  }
+
+  if (parsed.qualityAudit != null && (
+    typeof parsed.qualityAudit !== "object" || Array.isArray(parsed.qualityAudit)
+  )) {
+    fail("qualityAudit must be an object");
   }
 
   return parsed;

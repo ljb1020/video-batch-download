@@ -25,15 +25,23 @@ export class KuaishouParser extends PlatformParser {
     const page = await context.newPage();
     const mediaCandidates = [];
     const interceptedDetails = new Map();
+    const responseTasks = new Set();
     let permanentReason = null;
     let riskControlled = false;
+    let closing = false;
 
     const addMediaCandidate = (candidate) => {
-      if (!candidate.url || mediaCandidates.some((item) => item.url === candidate.url)) return;
+      if (!candidate.url) return;
+      const existing = mediaCandidates.find((item) => item.url === candidate.url);
+      if (existing) {
+        Object.assign(existing, Object.fromEntries(Object.entries(candidate).filter(([, value]) => value != null && value !== 0)));
+        return;
+      }
       mediaCandidates.push(candidate);
     };
 
-    page.on("response", async (response) => {
+    const handleResponse = (response) => {
+      const task = (async () => {
       const responseUrl = response.url();
       const headers = response.headers();
       const contentType = headers["content-type"] ?? "";
@@ -56,10 +64,16 @@ export class KuaishouParser extends PlatformParser {
           const photoId = detail?.photo?.id;
           if (photoId) interceptedDetails.set(String(photoId), detail);
         } catch (error) {
-          console.warn(`[kuaishou] failed to parse GraphQL response: ${error.message}`);
+          if (!closing) console.warn(`[kuaishou] failed to parse GraphQL response: ${error.message}`);
         }
       }
-    });
+      })().catch((error) => {
+        if (!closing) console.warn(`[kuaishou] response handler failed: ${error.message}`);
+      });
+      responseTasks.add(task);
+      task.finally(() => responseTasks.delete(task));
+    };
+    page.on("response", handleResponse);
 
     try {
       await page.goto(url, {
@@ -110,8 +124,10 @@ export class KuaishouParser extends PlatformParser {
         throw error;
       }
 
-      candidates.sort((a, b) => this._candidateScore(b) - this._candidateScore(a));
+      candidates.sort((a, b) => this._compareCandidates(a, b));
       const selected = candidates[0];
+      const availableStreams = this._normalizeAvailableStreams(candidates, finalUrl);
+      const selectedStream = availableStreams.find((stream) => stream.url === selected.url);
       const rawPageTitle = await page.title().catch(() => "");
       const pageTitle = rawPageTitle.replace(/[-_]快手\s*$/u, "").trim();
       const photo = detail?.photo ?? {};
@@ -119,6 +135,7 @@ export class KuaishouParser extends PlatformParser {
       const caption = photo.caption ?? photo.originCaption ?? pageTitle ?? null;
       const authorId = authorData.id ?? this._extractUserId(finalUrl);
 
+      const mediaAlternatives = availableStreams.map((stream) => [{ ...stream }]);
       return {
         platform: KuaishouParser.getPlatformName(),
         sourceUrl: url,
@@ -140,17 +157,15 @@ export class KuaishouParser extends PlatformParser {
           share_count: this._normalizeCount(photo.shareCount),
         },
         referer: finalUrl,
-        mediaStreams: [
-          {
-            url: selected.url,
-            type: "video+audio",
-            format: "mp4",
-            quality: selected.height ?? null,
-            referer: finalUrl,
-          },
-        ],
+        availableStreams,
+        qualityAudit: this._buildQualityAudit(availableStreams, selectedStream),
+        mediaAlternatives,
+        mediaStreams: mediaAlternatives[0],
       };
     } finally {
+      closing = true;
+      page.off("response", handleResponse);
+      await settleWithin(Promise.allSettled([...responseTasks]), 5_000);
       await settleWithin(context.close(), 5_000);
     }
   }
@@ -200,19 +215,19 @@ export class KuaishouParser extends PlatformParser {
       candidates.push({ url, source: "target-detail", ...metadata });
     };
 
-    add(photo.photoUrl, { codec: "h264", priority: 4 });
+    add(photo.photoUrl, { codec: "h264", source: "photo-url" });
     this._collectManifestCandidates(photo.videoResource?.json?.h264 ?? photo.videoResource?.h264, add, {
       codec: "h264",
-      priority: 3,
+      source: "video-resource-h264",
     });
     this._collectManifestCandidates(photo.manifest?.json ?? photo.manifest, add, {
       codec: "h264",
-      priority: 2,
+      source: "manifest-h264",
     });
-    add(photo.photoH265Url, { codec: "hevc", priority: 1 });
+    add(photo.photoH265Url, { codec: "hevc", source: "photo-h265-url" });
     this._collectManifestCandidates(photo.manifestH265?.json ?? photo.manifestH265, add, {
       codec: "hevc",
-      priority: 0,
+      source: "manifest-h265",
     });
     return candidates;
   }
@@ -226,6 +241,9 @@ export class KuaishouParser extends PlatformParser {
           height: representation?.height ?? null,
           bitrate: representation?.avgBitrate ?? representation?.maxBitrate ?? 0,
           totalBytes: representation?.fileSize ?? 0,
+          fps: representation?.frameRate ?? representation?.fps ?? 0,
+          quality: representation?.qualityType ?? representation?.quality ?? representation?.height ?? null,
+          label: representation?.qualityLabel ?? representation?.name ?? null,
         });
         for (const backupUrl of representation?.backupUrl ?? []) {
           add(backupUrl, {
@@ -234,6 +252,9 @@ export class KuaishouParser extends PlatformParser {
             height: representation?.height ?? null,
             bitrate: representation?.avgBitrate ?? representation?.maxBitrate ?? 0,
             totalBytes: representation?.fileSize ?? 0,
+            fps: representation?.frameRate ?? representation?.fps ?? 0,
+            quality: representation?.qualityType ?? representation?.quality ?? representation?.height ?? null,
+            label: representation?.qualityLabel ?? representation?.name ?? null,
           });
         }
       }
@@ -270,11 +291,76 @@ export class KuaishouParser extends PlatformParser {
   }
 
   _candidateScore(candidate) {
-    const priority = candidate.priority ?? -1;
     const pixels = Number(candidate.width ?? 0) * Number(candidate.height ?? 0);
+    const fps = this._normalizeFps(candidate.fps);
     const bitrate = Number(candidate.bitrate ?? 0);
     const bytes = Number(candidate.totalBytes ?? 0);
-    return priority * 1e15 + pixels * 1e6 + bitrate * 1e3 + bytes;
+    const compatibility = /^(?:h264|avc)$/i.test(candidate.codec ?? "") ? 1 : 0;
+    const sourcePreference = /manifest|video-resource/i.test(candidate.source ?? "") ? 1 : 0;
+    return pixels * 1e9 + fps * 1e6 + bitrate + Math.min(bytes, 1e9) / 1e3
+      + compatibility / 100 + sourcePreference / 1_000;
+  }
+
+  _compareCandidates(a, b) {
+    const dimensions = [
+      Number(b.width ?? 0) * Number(b.height ?? 0) - Number(a.width ?? 0) * Number(a.height ?? 0),
+      this._normalizeFps(b.fps) - this._normalizeFps(a.fps),
+      Number(b.bitrate ?? 0) - Number(a.bitrate ?? 0),
+      Number(b.totalBytes ?? 0) - Number(a.totalBytes ?? 0),
+      (/^(?:h264|avc)$/i.test(b.codec ?? "") ? 1 : 0) - (/^(?:h264|avc)$/i.test(a.codec ?? "") ? 1 : 0),
+      (/manifest|video-resource/i.test(b.source ?? "") ? 1 : 0) - (/manifest|video-resource/i.test(a.source ?? "") ? 1 : 0),
+    ];
+    return dimensions.find((difference) => difference !== 0) ?? 0;
+  }
+
+  _normalizeFps(value) {
+    if (typeof value === "string" && value.includes("/")) {
+      const [numerator, denominator] = value.split("/").map(Number);
+      return denominator ? numerator / denominator : 0;
+    }
+    const fps = Number(value ?? 0);
+    return Number.isFinite(fps) ? fps : 0;
+  }
+
+  _normalizeAvailableStreams(candidates, referer) {
+    const unique = new Map();
+    for (const candidate of candidates) {
+      if (!candidate?.url || unique.has(candidate.url)) continue;
+      const width = Number(candidate.width) || null;
+      const height = Number(candidate.height) || null;
+      const fps = this._normalizeFps(candidate.fps) || null;
+      const bitrate = Number(candidate.bitrate) || null;
+      const totalBytes = Number(candidate.totalBytes) || null;
+      const quality = candidate.quality ?? height;
+      const label = candidate.label ?? (width && height ? `${width}x${height}${fps ? `@${fps}` : ""}` : null);
+      unique.set(candidate.url, {
+        url: candidate.url,
+        type: "video+audio",
+        format: "mp4",
+        width,
+        height,
+        fps,
+        bitrate,
+        codec: candidate.codec ?? null,
+        quality,
+        label,
+        source: candidate.source ?? null,
+        totalBytes,
+        referer,
+      });
+    }
+    return [...unique.values()].sort((a, b) => this._compareCandidates(a, b));
+  }
+
+  _buildQualityAudit(availableStreams, selected) {
+    const qualities = [...new Set(availableStreams.map((stream) => stream.label ?? stream.quality).filter(Boolean))];
+    return {
+      advertisedQualities: qualities,
+      accessibleQualities: qualities,
+      selectedQuality: selected?.label ?? selected?.quality ?? null,
+      selectionReason: "highest anonymous stream by resolution, frame rate, bitrate, and size; codec/source only break quality ties",
+      limitedBy: null,
+    };
   }
 
   _normalizeDuration(value) {

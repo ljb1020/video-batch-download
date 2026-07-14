@@ -71,7 +71,7 @@ export async function isValidMp4(filePath) {
  * Get video metadata using ffprobe.
  * @param {string} filePath - Path to video file
  * @param {string|null} ffmpegPath - Path to ffmpeg (ffprobe assumed in same dir)
- * @returns {Promise<{width: number, height: number, bitrate_kbps: number, duration_secs: number, codec: string, format: string} | null>}
+ * @returns {Promise<{width: number, height: number, bitrate_kbps: number, duration_secs: number, codec: string, format: string, fps: number|null, pixel_format: string|null, hdr: boolean} | null>}
  */
 export async function getVideoInfo(filePath, ffmpegPath = null) {
   // Resolve ffprobe path from ffmpeg path
@@ -87,7 +87,7 @@ export async function getVideoInfo(filePath, ffmpegPath = null) {
     const args = [
       "-v", "error",
       "-select_streams", "v:0",
-      "-show_entries", "stream=width,height,codec_name,bit_rate,duration",
+      "-show_entries", "stream=width,height,codec_name,bit_rate,duration,avg_frame_rate,r_frame_rate,pix_fmt,color_transfer,color_primaries,color_space",
       "-show_entries", "format=duration,bit_rate",
       "-of", "json",
       filePath,
@@ -115,6 +115,14 @@ export async function getVideoInfo(filePath, ffmpegPath = null) {
         const width = stream.width ?? 0;
         const height = stream.height ?? 0;
         const codec = stream.codec_name ?? "unknown";
+        const frameRate = stream.avg_frame_rate ?? stream.r_frame_rate ?? "0/0";
+        const [fpsNumerator, fpsDenominator] = String(frameRate).split("/").map(Number);
+        const fpsValue = fpsDenominator > 0 ? fpsNumerator / fpsDenominator : Number(frameRate);
+        const fps = Number.isFinite(fpsValue) && fpsValue > 0
+          ? Math.round(fpsValue * 1000) / 1000
+          : null;
+        const colorTransfer = stream.color_transfer ?? null;
+        const hdr = /(?:smpte2084|arib-std-b67)/i.test(String(colorTransfer ?? ""));
 
         // Bitrate: prefer stream, fallback to format
         const bitrateBps = Number(stream.bit_rate ?? format.bit_rate ?? 0);
@@ -133,6 +141,12 @@ export async function getVideoInfo(filePath, ffmpegPath = null) {
           bitrate_kbps: bitrateKbps || null,
           duration_secs: durationSecs > 0 ? Math.round(durationSecs * 10) / 10 : null,
           codec,
+          fps,
+          pixel_format: stream.pix_fmt ?? null,
+          color_transfer: colorTransfer,
+          color_primaries: stream.color_primaries ?? null,
+          color_space: stream.color_space ?? null,
+          hdr,
           format: formatName,
         });
       } catch {

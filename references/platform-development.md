@@ -69,7 +69,10 @@
    - `postTime`
    - `duration`
    - `statistics`
-   - `mediaStreams`
+   - `mediaStreams`（当前选中的无登录态最高画质流组）
+   - `availableStreams`（可选；无登录态下的全部候选，用于审计）
+   - `mediaAlternatives`（可选；按画质降序排列的可下载流组）
+   - `qualityAudit`（可选；宣传档位、实际可用档位、选择结果与原因）
    - `referer`（可选；平台默认下载来源）
 4. `mediaStreams` 中可按需提供 stream 级 `referer`、`headers`、`quality` 等字段。
 5. 不要修改 `router.js` 注册插件；启动时会自动发现。用启动日志 `[platforms] loaded N: ...` 确认插件 ID 和加载结果。
@@ -104,7 +107,7 @@
 
 ## 后续重构记录
 
-- 下载器目前只执行解析器返回的一组 `mediaStreams`。后续如果要系统性提升稳定性，可以引入候选下载计划：解析器返回多个计划，下载器按顺序尝试合流、DASH 双流、平台兜底 URL，并记录每个候选的下载和音轨探测结果。
+- 下载器先执行 `mediaStreams`，失败后按 `mediaAlternatives` 的画质顺序降级；每个候选都会检查音视频轨及可用的分辨率、帧率、HDR 预期。新插件应避免把同一 URL 重复放入多个候选组。
 - 视频轨和音轨都存在才是下载成功条件。新增或维护平台时，不要只校验 MP4 容器有效，也不要只校验 audio stream；纯音频、纯视频或初始化片段都不能被当作完成视频。
 
 ## 不接受的改动

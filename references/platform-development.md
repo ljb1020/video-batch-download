@@ -15,9 +15,10 @@
 当文档和代码不一致时，先以这些文件为准，再修正文档：
 
 - CLI 参数和默认值：`scripts/download.mjs`
-- 支持平台列表：`scripts/platforms/router.js`
+- 支持平台列表：运行时扫描 `scripts/platforms/*.js` 和 `scripts/platforms/<id>/index.js` 的结果
+- 插件发现、禁用和故障隔离：`scripts/platforms/router.js`
 - 平台解析器契约：`scripts/platforms/base.js`
-- 平台解析实现：`scripts/platforms/<platform>.js`
+- 平台解析实现：`scripts/platforms/<platform>.js` 或 `scripts/platforms/<id>/index.js`
 - 转写服务行为：`scripts/transcribe_server.py`
 - skill 触发规则：`SKILL.md`
 
@@ -41,16 +42,18 @@
 
 ## 架构边界
 
-- 平台相关逻辑放在 `scripts/platforms/<platform>.js`。
-- URL 匹配和平台启用状态放在 `scripts/platforms/router.js`。
+- 平台相关逻辑放在 `scripts/platforms/<platform>.js`；复杂插件也可放在 `scripts/platforms/<id>/index.js` 并在同目录拆分私有模块。
+- URL 匹配规则由插件自己的 `static matchesUrl()` 维护；不要在核心路由中增加平台分支。
+- `scripts/platforms/router.js` 只负责发现、契约校验、禁用、故障隔离和通用路由，不维护静态平台清单。
 - 通用下载、合并、转写、断点续传和输出逻辑放在 `scripts/download.mjs` 或 `scripts/utils/`。
 - 新平台不要把特殊解析逻辑塞进 `scripts/download.mjs`，优先在平台解析器中归一化为 `mediaStreams`。
 - 只有多个平台共同需要的能力，才考虑抽到 `scripts/utils/`。
 
 ## 新增平台流程
 
-1. 新建 `scripts/platforms/<platform>.js`。
+1. 新建 `scripts/platforms/<platform>.js`；需要多个私有模块时，新建 `scripts/platforms/<id>/index.js`。
 2. 实现或遵守 `PlatformParser` 契约：
+   - `static platformId` 或 `static id`（可选；默认使用文件名/目录名，建议 ID 使用稳定的小写 ASCII）
    - `static getPlatformName()`
    - `static getSlug()`（可选；需要 ASCII 文件名 slug 时覆盖）
    - `static matchesUrl(url)`
@@ -69,9 +72,20 @@
    - `mediaStreams`
    - `referer`（可选；平台默认下载来源）
 4. `mediaStreams` 中可按需提供 stream 级 `referer`、`headers`、`quality` 等字段。
-5. 在 `scripts/platforms/router.js` 注册解析器。
-6. 按本文档的同步矩阵更新文档。
-7. 做最小验证，优先 `--no-transcribe`。
+5. 不要修改 `router.js` 注册插件；启动时会自动发现。用启动日志 `[platforms] loaded N: ...` 确认插件 ID 和加载结果。
+6. 确认返回值通过 `validateParsedVideo()`：必要字符串字段完整，`mediaStreams` 至少包含一个 `video+audio`，或同时包含 `video` 与 `audio`。
+7. 用 `--disable-platform <id>` 验证插件可独立下线；该参数可重复传入，也支持逗号分隔。
+8. 按本文档的同步矩阵更新文档。
+9. 做最小验证，优先 `--no-transcribe`。
+
+## 插件加载与故障隔离
+
+- loader 扫描 `scripts/platforms` 下的 `.js` / `.mjs` 文件，以及子目录中的 `index.js` / `index.mjs`；`base.js` 和 `router.js` 不作为插件。
+- 优先使用模块默认导出的解析器类；也兼容可识别的命名导出。
+- 插件类必须提供 `static getPlatformName()`、`static matchesUrl()` 和实例 `parse()`，否则输出 `[platforms] skipped <id>: ...`。
+- 插件 ID 优先取 `static platformId` / `static id`，否则取文件名或目录名；ID 必须唯一，以小写字母或数字开头，后续只能包含小写字母、数字、下划线和连字符。
+- 单个插件导入失败、契约错误、ID 冲突或 matcher 抛错，不得阻止其他插件加载和匹配。
+- 临时停用平台优先使用 `--disable-platform <id>`，无需删除代码，也不要在核心下载流程里加临时判断。
 
 ## 解析策略
 
@@ -84,6 +98,7 @@
 - B站这类页面可能播放正常但没有被 response 监听捕获到 `playurl`，应优先尝试页面 `__playinfo__` 和主动 API fallback。
 - 小红书这类页面可能显示登录弹窗，但公开笔记数据仍在 `__INITIAL_STATE__` 或媒体响应中；不要只因登录弹窗就放弃。
 - 快手详情页同时加载目标作品和推荐流；必须按重定向后的 `photoId` 匹配 Apollo/GraphQL 详情，不能从推荐媒体中直接选择最大文件。
+- 微博必须按 URL 的 `fid`/`oid` 匹配 `/tv/api/component` 和 CDN `media_id`；清晰度应按标签或 `template=WxH` 排序，不能依赖接口对象顺序。CDN URL 带短时签名，重试时重新解析。
 - 能识别删除、私密、登录限制、地区限制时，标记为永久失败。
 - 不支持的内容类型要明确报错，例如图文笔记、直播、合集等。
 
@@ -108,6 +123,7 @@
 |---|---|
 | 新增或移除支持平台 | `README.md`, `README_zh.md`, `SKILL.md`, `examples/usage.md`, `references/architecture.md`, 本文件 |
 | 修改 CLI 参数或默认值 | `scripts/download.mjs`, `README.md`, `README_zh.md`, `SKILL.md`, `examples/usage.md` |
+| 修改插件发现、契约或隔离行为 | `scripts/platforms/router.js`, `scripts/platforms/base.js`, `references/architecture.md`, 本文件 |
 | 修改输出 JSON 结构 | `README.md`, `README_zh.md`, `SKILL.md`, `examples/sample_output.json`, `references/architecture.md` |
 | 修改依赖或环境要求 | `package.json`, `package-lock.json`, `requirements.txt`, `README.md`, `README_zh.md`, `SKILL.md` |
 | 修改下载、合并或转写流程 | `SKILL.md`, `references/architecture.md`, `README.md`, `README_zh.md` |
@@ -116,8 +132,10 @@
 
 ## 最小验证
 
+- 代码修改：先运行 `npm test`，确认插件发现、路由和统一结果契约测试通过。
 - 文档或版本修改：运行 `node scripts/download.mjs --help`，并做关键词搜索。
-- 路由或 URL 匹配修改：做 route-level 检查，确认目标 URL 被正确分发。
+- 路由或 URL 匹配修改：做 route-level 检查，确认目标 URL 被正确分发，并验证无效插件被跳过后其他插件仍可加载。
+- 插件发现修改：覆盖单文件插件、`<id>/index.js` 插件、重复 ID、契约缺失和 `--disable-platform`（重复参数及逗号分隔）。
 - 新平台解析器：至少用一个公开视频跑 `--no-transcribe`。
 - 下载流程修改：优先用 `--no-transcribe` 验证下载和元数据输出。
 - 转写流程修改：再单独验证音频提取和转写。

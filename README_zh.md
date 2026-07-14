@@ -25,6 +25,7 @@
 | B站 / Bilibili | ✅ 已支持 | 公开视频；支持 DASH 合并与播放流兜底 |
 | 快手           | ✅ 已支持 | 公开视频；按作品 ID 精确读取页面详情 |
 | 小红书         | ✅ 已支持 | 公开视频笔记；支持笔记定位与媒体兜底 |
+| 微博           | ✅ 已支持 | 公开视频；自动选择最高画质合流 MP4   |
 | 更多平台       | 🚧 计划中 | 可通过平台适配层继续扩展             |
 
 ## 功能特性
@@ -34,7 +35,8 @@
 - **本地语音转写**：通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 在本地生成文案，不依赖云 API；可选 [OpenCC](https://github.com/BYVoid/OpenCC) 繁→简转换。
 - **结构化输出**：保存视频元数据、TXT 文案和 JSON 结果。
 - **分离流支持**：B站和抖音遇到视频/音频分离媒体流时，会自动下载并通过 ffmpeg 合并。
-- **运行时兜底**：结合平台 API、页面状态和浏览器实际观察到的媒体响应，提高 B站/抖音/快手/小红书稳定性。
+- **运行时兜底**：结合平台 API、页面状态和浏览器实际观察到的媒体响应，提高 B站/抖音/快手/小红书/微博稳定性。
+- **可插拔平台适配器**：运行时自动发现平台插件、校验统一契约；单个插件损坏不会拖垮其他平台。
 - **媒体轨道校验**：只有最终 MP4 同时包含视频轨和音频轨，才会被标记为完成。
 - **断点续跑**：重复运行时可跳过已完成下载和已有转写结果；失败项支持指数退避重试。
 - **Agent Skill 可用**：可作为 Claude / Codex 类助手的 Skill 使用。
@@ -59,6 +61,7 @@
 - 抖音可能返回视频/音频分离流；纯音频资源会被拒绝，不会误存为视频
 - 小红书仅支持视频笔记，不支持图文笔记；公开视频笔记即使出现登录弹窗，也可能通过页面状态和媒体响应解析
 - 快手按重定向后的作品 ID 匹配 Apollo/GraphQL 详情，避免误下载推荐流；风控页面需要稍后重试或使用有头模式
+- 微博支持公开的 `video.weibo.com/show?fid=1034:...` 和 `weibo.com/tv/show/1034:...` 视频；匿名访客验证或短时有效的 CDN 地址可能需要重试或使用有头模式
 - 短分享链接可能过期或跳转到无关推荐页；可用时优先使用平台规范 URL
 - 转写仅限语音内容，不包含屏幕文字识别
 
@@ -100,6 +103,7 @@ git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.cla
 > "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
 > "下载这个小红书视频 http://xhslink.com/xxxxx"
 > "下载这个快手视频 https://v.kuaishou.com/xxxxx"
+> "下载并转写这个微博视频 https://video.weibo.com/show?fid=1034:5317814823878730"
 
 ### 作为命令行工具安装
 
@@ -140,13 +144,14 @@ node scripts/download.mjs "https://v.douyin.com/xxxxx"
 node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
 node scripts/download.mjs "https://v.kuaishou.com/xxxxx"
 node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
+node scripts/download.mjs "https://video.weibo.com/show?fid=1034:5317814823878730"
 ```
 
 ### 批量下载多个视频
 
 ```bash
 # 支持混合平台
-node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "https://v.kuaishou.com/xxxxx" "http://xhslink.com/xxxxx"
+node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "https://v.kuaishou.com/xxxxx" "http://xhslink.com/xxxxx" "https://video.weibo.com/show?fid=1034:5317814823878730"
 
 # 自定义输出目录
 node scripts/download.mjs "url" --output ./my_output
@@ -195,6 +200,15 @@ node scripts/download.mjs "url" --device cpu --compute-type int8 --model small
 ```bash
 node scripts/download.mjs --input links.txt --output ./downloads --headed
 ```
+
+### 临时禁用平台插件
+
+```bash
+node scripts/download.mjs --input links.txt --disable-platform weibo
+node scripts/download.mjs --input links.txt --disable-platform weibo,kuaishou
+```
+
+`--disable-platform <id>` 可以重复传入，也支持逗号分隔。插件被禁用、缺失或加载失败时，其余平台插件仍可正常工作。
 
 ## 输出结果
 
@@ -301,6 +315,7 @@ video_results/
 | `--clear-temp`               | 关闭              | 删除 `<output>/.temp` 缓存并退出   |
 | `--headed`                   | 关闭              | 显示浏览器窗口                     |
 | `--storage-state <file>`     | —                 | Playwright storage-state JSON      |
+| `--disable-platform <id>`    | —                 | 禁用插件 ID；可重复传入或用逗号分隔 |
 
 </details>
 
@@ -325,6 +340,10 @@ video_results/
 ```txt
 视频链接
     ↓
+自动发现平台插件，跳过被禁用或损坏的插件
+    ↓
+通过 `matchesUrl()` 路由，并校验解析器的标准化输出
+    ↓
 Playwright 打开页面并捕获媒体地址
     ↓
 下载视频 / 音频流到 <output>/.temp 缓存
@@ -337,6 +356,16 @@ Playwright 打开页面并捕获媒体地址
 ```
 
 解析与下载默认并发为 `1`，更稳定，可通过 CLI 参数提高。Whisper 模型在进程内加载一次并复用。
+
+## 运行测试
+
+修改平台插件、路由或统一输出契约后，运行：
+
+```bash
+npm test
+```
+
+测试覆盖插件自动发现、禁用与故障隔离、URL 路由，以及平台解析结果的标准化校验，不会下载真实视频。
 
 ## 参考文档
 

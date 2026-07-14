@@ -1,19 +1,19 @@
 ---
 name: video-batch-download
-description: "Use this skill when the user provides 抖音 (Douyin), B站 (Bilibili), 快手 (Kuaishou), or 小红书 (Xiaohongshu) video URLs and wants to download videos, extract metadata, transcribe audio with local Whisper, convert Traditional→Simplified Chinese, or get structured transcripts as JSON/TXT."
+description: "Use this skill when the user provides 抖音 (Douyin), B站 (Bilibili), 快手 (Kuaishou), 小红书 (Xiaohongshu), or 微博 (Weibo) video URLs and wants to download videos, extract metadata, transcribe audio with local Whisper, convert Traditional→Simplified Chinese, or get structured transcripts as JSON/TXT."
 license: MIT
 metadata:
-    version: "3.1.0"
+    version: "4.0.0"
 ---
 
-# Video Batch Download & Transcribe (Douyin, Bilibili, Kuaishou & Xiaohongshu)
+# Video Batch Download & Transcribe (Douyin, Bilibili, Kuaishou, Xiaohongshu & Weibo)
 
-Download public videos from Douyin, Bilibili, Kuaishou and Xiaohongshu, extract transcripts — fully locally, no cloud APIs.
+Download public videos from Douyin, Bilibili, Kuaishou, Xiaohongshu and Weibo, extract transcripts — fully locally, no cloud APIs.
 
 ## When to use
 
-- User pastes one or more 抖音, B站, 快手, or 小红书 links and wants the spoken content as text
-- User says "提取文案", "语音转文字", "下载抖音视频", "下载B站视频", "下载快手视频", "下载小红书视频", or gives a supported URL
+- User pastes one or more 抖音, B站, 快手, 小红书, or 微博 links and wants the spoken content as text
+- User says "提取文案", "语音转文字", "下载抖音视频", "下载B站视频", "下载快手视频", "下载小红书视频", "下载微博视频", or gives a supported URL
 - User wants structured metadata (title, author, stats, post time) from supported public video posts
 - User wants batch download and/or transcription of videos from the supported platforms
 
@@ -40,10 +40,10 @@ Default transcription uses `medium + cuda + float16 + zh`, which works best on m
 
 ## Workflow
 
-1. **Receive URLs** — User provides one or more Douyin, Bilibili, Kuaishou or Xiaohongshu links (or share text containing links). The script auto-extracts valid URLs from any text and routes them to the appropriate platform parser.
+1. **Receive URLs** — User provides one or more Douyin, Bilibili, Kuaishou, Xiaohongshu or Weibo links (or share text containing links). The script discovers platform plugins at runtime, skips disabled or broken plugins, and routes extracted URLs through each plugin's `matchesUrl()` method.
 2. **Ask for output directory** — If user doesn't specify, default to `./video_results/`.
 3. **Run the script** — Parallel pipeline:
-    - Parse video metadata via Playwright browser interception, page state, and runtime media fallbacks (concurrency 1 by default for stability)
+    - Parse video metadata via Playwright browser interception, page state, and runtime media fallbacks, then validate the normalized `ParsedVideo`/`mediaStreams` result (concurrency 1 by default for stability)
     - Download MP4 via CDN URL into `<output>/.temp` cache (concurrency 1 by default for stability). For Bilibili and Douyin separated media streams, downloads video and audio separately and merges with ffmpeg.
     - Validate the final MP4 has both video and audio tracks before treating the item as completed
     - Extract audio with ffmpeg → transcribe with local faster-whisper (model reused, conservative CUDA default)
@@ -60,6 +60,7 @@ node scripts/download.mjs "https://v.douyin.com/xxxxx"
 node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
 node scripts/download.mjs "https://v.kuaishou.com/xxxxx"
 node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
+node scripts/download.mjs "https://video.weibo.com/show?fid=1034:5317814823878730"
 ```
 
 ### Multiple URLs
@@ -77,7 +78,7 @@ node scripts/download.mjs "url" --output ./my_output
 ### Mixed platforms
 
 ```bash
-node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "https://v.kuaishou.com/xxxxx" "http://xhslink.com/xxxxx"
+node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "https://v.kuaishou.com/xxxxx" "http://xhslink.com/xxxxx" "https://video.weibo.com/show?fid=1034:5317814823878730"
 ```
 
 ### From a text file
@@ -122,6 +123,15 @@ node scripts/download.mjs --input links.txt --output ./downloads --max-attempts 
 node scripts/download.mjs --input links.txt --output ./downloads --headed
 ```
 
+### Temporarily disable platform plugins
+
+```bash
+node scripts/download.mjs --input links.txt --disable-platform weibo
+node scripts/download.mjs --input links.txt --disable-platform weibo,kuaishou
+```
+
+`--disable-platform <id>` may be repeated and accepts comma-separated IDs. Other plugins continue loading when one plugin is disabled, missing, or invalid.
+
 ## CLI Options
 
 ### Download options
@@ -140,6 +150,7 @@ node scripts/download.mjs --input links.txt --output ./downloads --headed
 | `--clear-temp` | off | Delete `<output>/.temp` cache and exit |
 | `--headed` | off | Show browser window |
 | `--storage-state <file>` | — | Playwright storage-state JSON |
+| `--disable-platform <id>` | — | Disable plugin ID(s); repeat or use comma-separated IDs |
 
 ### Transcription options
 
@@ -235,11 +246,13 @@ By default, the final MP4 is copied into the per-video folder. The `.temp` direc
 
 ## Important notes
 
-- Supports Douyin (抖音), Bilibili (B站), Kuaishou (快手), and Xiaohongshu (小红书) platforms
+- Supports Douyin (抖音), Bilibili (B站), Kuaishou (快手), Xiaohongshu (小红书), and Weibo (微博) platforms
 - Bilibili high-quality videos use DASH format (separate video/audio streams) — automatically merged with ffmpeg; if page interception misses `playurl`, the parser falls back to page `__playinfo__` and direct `x/player/playurl` requests.
 - Douyin may expose merged MP4 or separated `media-video-*` / `media-audio-*` streams; audio-only resources are never treated as completed videos.
 - Xiaohongshu: video notes only; image/text notes are not supported. Login overlays may still expose public video-note state, so parser checks the target note state and media responses before failing.
 - Kuaishou resolves short links, matches Apollo/GraphQL detail data by the target photo ID, and rejects unrelated recommendation media.
+- Weibo matches the target `fid`/`oid`, prefers `/tv/api/component` metadata and the highest-resolution muxed MP4, and falls back to matching page/CDN media. Anonymous visitor checks or expiring CDN URLs may require a retry or `--headed` mode.
+- Platform plugins are discovered from `scripts/platforms/*.js` and `scripts/platforms/<id>/index.js`; a single plugin load failure is reported and isolated.
 - Downloaded or merged MP4 files must contain both video and audio tracks; otherwise the item is retried instead of producing a misleading success.
 - Short share links can expire or redirect to unrelated feed pages; if that happens, use the canonical platform URL when available.
 - First Whisper model use downloads ~500 MB — this is normal, not a hang.
@@ -256,7 +269,7 @@ By default, the final MP4 is copied into the per-video folder. The `.temp` direc
 
 ## Boundaries
 
-- Platforms: Douyin (抖音), Bilibili (B站), Kuaishou (快手), and Xiaohongshu (小红书).
+- Platforms: Douyin (抖音), Bilibili (B站), Kuaishou (快手), Xiaohongshu (小红书), and Weibo (微博).
 - Process only publicly accessible content the user is permitted to access.
 - Do not use third-party online parsing or transcription APIs.
 

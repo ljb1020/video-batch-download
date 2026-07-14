@@ -25,6 +25,7 @@
 | Bilibili       | ✅ Supported  | Public videos; DASH merge and playurl fallbacks   |
 | Kuaishou       | ✅ Supported  | Public videos; exact photo-ID page-state matching |
 | Xiaohongshu    | ✅ Supported  | Public video notes; note and media fallbacks      |
+| Weibo          | ✅ Supported  | Public Weibo videos; highest-quality muxed MP4    |
 | More platforms |    🚧 Planned | Extendable through the platform adapter layer     |
 
 ## Features
@@ -34,7 +35,8 @@
 - **Local transcription** — uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) to generate transcripts without cloud APIs; optional Traditional→Simplified conversion via [OpenCC](https://github.com/BYVoid/OpenCC).
 - **Structured output** — saves metadata, transcript text, and JSON output locally.
 - **Separated stream support** — downloads and merges separated video/audio streams with ffmpeg for Bilibili and Douyin when needed.
-- **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Kuaishou/Xiaohongshu reliability.
+- **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Kuaishou/Xiaohongshu/Weibo reliability.
+- **Pluggable platform adapters** — discovers adapters at runtime, validates their shared contract, and isolates a broken adapter so other platforms can keep working.
 - **Media track validation** — treats an item as completed only after the final MP4 has both video and audio tracks.
 - **Resumable workflow** — reruns can skip completed downloads and existing transcripts; failed items auto-retry with exponential backoff.
 - **Agent Skill ready** — can be installed as a Claude/Codex-style assistant skill.
@@ -59,6 +61,7 @@ Additional practical limits:
 - Douyin may return separated video/audio streams; audio-only resources are rejected instead of being saved as videos
 - Xiaohongshu image/text notes are not supported (video notes only); public video notes can still work when a login overlay is shown
 - Kuaishou matches Apollo/GraphQL detail data by the redirected photo ID to avoid downloading recommendation feeds; risk-control pages may require a later retry or headed mode
+- Weibo supports public `video.weibo.com/show?fid=1034:...` and `weibo.com/tv/show/1034:...` videos. Anonymous visitor checks or expiring CDN URLs may require a retry or `--headed` mode
 - Short share links may expire or redirect to unrelated feed pages; use canonical URLs when available
 - Transcription is speech-only; on-screen text is not captured
 
@@ -100,6 +103,7 @@ In Claude Code, paste a public video link and ask for download or transcript ext
 > "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
 > "下载这个小红书视频 http://xhslink.com/xxxxx"
 > "下载这个快手视频 https://v.kuaishou.com/xxxxx"
+> "下载并转写这个微博视频 https://video.weibo.com/show?fid=1034:5317814823878730"
 
 ### Install as a CLI Tool
 
@@ -140,13 +144,14 @@ node scripts/download.mjs "https://v.douyin.com/xxxxx"
 node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
 node scripts/download.mjs "https://v.kuaishou.com/xxxxx"
 node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
+node scripts/download.mjs "https://video.weibo.com/show?fid=1034:5317814823878730"
 ```
 
 ### Download multiple videos
 
 ```bash
 # Mixed platforms are supported
-node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "https://v.kuaishou.com/xxxxx" "http://xhslink.com/xxxxx"
+node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "https://v.kuaishou.com/xxxxx" "http://xhslink.com/xxxxx" "https://video.weibo.com/show?fid=1034:5317814823878730"
 
 # Custom output directory
 node scripts/download.mjs "url" --output ./my_output
@@ -195,6 +200,15 @@ node scripts/download.mjs "url" --device cpu --compute-type int8 --model small
 ```bash
 node scripts/download.mjs --input links.txt --output ./downloads --headed
 ```
+
+### Temporarily disable a platform plugin
+
+```bash
+node scripts/download.mjs --input links.txt --disable-platform weibo
+node scripts/download.mjs --input links.txt --disable-platform weibo,kuaishou
+```
+
+`--disable-platform <id>` can be repeated and also accepts comma-separated IDs. A disabled, missing, or failed plugin does not prevent the remaining platform plugins from loading.
 
 ## Output
 
@@ -301,6 +315,7 @@ Rerun with the same output directory to resume from `download-state.json`.
 | `--clear-temp`               | off               | Delete `<output>/.temp` cache and exit                       |
 | `--headed`                   | off               | Show browser window                                          |
 | `--storage-state <file>`     | —                 | Playwright storage-state JSON                                |
+| `--disable-platform <id>`    | —                 | Disable plugin ID(s); repeat or use comma-separated IDs      |
 
 </details>
 
@@ -325,6 +340,10 @@ Rerun with the same output directory to resume from `download-state.json`.
 ```txt
 Video URL(s)
     ↓
+Discover platform plugins; skip disabled or broken plugins
+    ↓
+Route each URL through `matchesUrl()` and validate normalized parser output
+    ↓
 Playwright opens the page and detects media URLs
     ↓
 Download video / audio streams into <output>/.temp cache
@@ -337,6 +356,16 @@ Save MP4, metadata JSON, and TXT transcript locally
 ```
 
 Parse and download concurrency default to `1` for stability and can be raised with CLI flags. The Whisper model is loaded once per process and reused across items.
+
+## Run Tests
+
+After changing platform plugins, routing, or the normalized output contract, run:
+
+```bash
+npm test
+```
+
+The tests cover plugin discovery, disabling and failure isolation, URL routing, and normalized parser-result validation. They do not download real videos.
 
 ## Reference Docs
 

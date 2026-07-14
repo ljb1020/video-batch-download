@@ -85,3 +85,78 @@ export class PlatformParser {
     throw new Error("parse() not implemented");
   }
 }
+
+/**
+ * A platform-scoped failure with stable retry semantics for the core pipeline.
+ */
+export class PlatformError extends Error {
+  constructor(message, { code = "PLATFORM_ERROR", permanent = false, cause } = {}) {
+    super(message, cause ? { cause } : undefined);
+    this.name = "PlatformError";
+    this.code = code;
+    this.permanent = permanent;
+  }
+}
+
+/**
+ * Validate the normalized boundary between a platform plugin and the core.
+ * Platform-specific response objects must never pass this boundary directly.
+ */
+export function validateParsedVideo(parsed, pluginId = "unknown") {
+  const fail = (message) => {
+    throw new PlatformError(`Invalid result from platform plugin ${pluginId}: ${message}`, {
+      code: "INVALID_PLUGIN_RESULT",
+      permanent: true,
+    });
+  };
+
+  if (!parsed || typeof parsed !== "object") fail("expected an object");
+  for (const field of ["platform", "sourceUrl", "canonicalUrl", "videoId"]) {
+    if (typeof parsed[field] !== "string" || !parsed[field].trim()) {
+      fail(`${field} must be a non-empty string`);
+    }
+  }
+  if (typeof parsed.title !== "string") fail("title must be a string");
+  if (!parsed.author || typeof parsed.author !== "object" || Array.isArray(parsed.author)) {
+    fail("author must be an object");
+  }
+  if (parsed.author.nickname != null && typeof parsed.author.nickname !== "string") {
+    fail("author.nickname must be a string or null");
+  }
+  if (!parsed.statistics || typeof parsed.statistics !== "object" || Array.isArray(parsed.statistics)) {
+    fail("statistics must be an object");
+  }
+  if (parsed.description != null && typeof parsed.description !== "string") {
+    fail("description must be a string or null");
+  }
+  if (parsed.postTime != null && typeof parsed.postTime !== "string") {
+    fail("postTime must be a string or null");
+  }
+  if (parsed.duration != null && (!Number.isFinite(parsed.duration) || parsed.duration < 0)) {
+    fail("duration must be a non-negative number or null");
+  }
+  if (!Array.isArray(parsed.mediaStreams) || parsed.mediaStreams.length === 0) {
+    fail("mediaStreams must be a non-empty array");
+  }
+
+  const streamTypes = new Set();
+  for (const [index, stream] of parsed.mediaStreams.entries()) {
+    if (!stream || typeof stream !== "object") fail(`mediaStreams[${index}] must be an object`);
+    if (!/^https?:\/\//i.test(stream.url ?? "")) {
+      fail(`mediaStreams[${index}].url must be an absolute HTTP(S) URL`);
+    }
+    if (!["video+audio", "video", "audio"].includes(stream.type)) {
+      fail(`mediaStreams[${index}].type is unsupported`);
+    }
+    if (!["mp4", "m4s"].includes(stream.format)) {
+      fail(`mediaStreams[${index}].format is unsupported`);
+    }
+    streamTypes.add(stream.type);
+  }
+
+  if (!streamTypes.has("video+audio") && !(streamTypes.has("video") && streamTypes.has("audio"))) {
+    fail("mediaStreams must contain a muxed stream or a video/audio pair");
+  }
+
+  return parsed;
+}

@@ -1,10 +1,13 @@
-# Example: Extract transcript from a single Douyin video
+# Usage examples
 
-Kuaishou public-video links are also accepted, including short links such as:
+Public links from Douyin, Bilibili, Kuaishou, Xiaohongshu, and Weibo are accepted. For example:
 
 ```bash
 node scripts/download.mjs "https://v.kuaishou.com/xxxxx" --no-transcribe
+node scripts/download.mjs "https://video.weibo.com/show?fid=1034:5317814823878730" --no-transcribe
 ```
+
+## Example: Extract a transcript from one Douyin video
 
 ## Input
 
@@ -15,6 +18,7 @@ node scripts/download.mjs "https://v.douyin.com/iRNBho5/" --output ./douyin_resu
 ## Terminal output (stderr)
 
 ```
+[platforms] loaded 5: bilibili, douyin, kuaishou, weibo, xiaohongshu
 [batch] 1 unique URL(s), parse concurrency 1, download concurrency 1, video output item folders, transcribe on (serial, medium, cuda), output ./douyin_results
 [1/1] parse attempt 1/10: https://v.douyin.com/iRNBho5/
 [1/1] extracting audio...
@@ -39,10 +43,35 @@ douyin_results/
 ```bash
 node scripts/download.mjs \
   "https://v.douyin.com/abc123" \
-  "https://v.douyin.com/def456" \
-  "https://v.douyin.com/ghi789" \
+  "https://www.bilibili.com/video/BVxxxxx" \
+  "https://video.weibo.com/show?fid=1034:5317814823878730" \
   --output ./my_results
 ```
+
+## Example: Download and transcribe a Weibo video
+
+```bash
+node scripts/download.mjs \
+  "https://video.weibo.com/show?fid=1034:5317698549383292" \
+  --output ./weibo_results
+```
+
+The Weibo adapter matches the requested `fid`, selects the highest-quality muxed MP4 exposed by the page, then uses the same download, track-validation, transcription, and output pipeline as every other platform.
+
+## Example: Temporarily disable platform plugins
+
+```bash
+# Repeat the option
+node scripts/download.mjs --input links.txt \
+  --disable-platform weibo \
+  --disable-platform kuaishou
+
+# Or use comma-separated IDs
+node scripts/download.mjs --input links.txt \
+  --disable-platform weibo,kuaishou
+```
+
+Disabled plugins are omitted from the startup list. If a plugin cannot be imported or fails contract validation, startup reports `[platforms] skipped <id>: ...` and continues with the remaining plugins.
 
 ## Example: GPU acceleration with high accuracy
 

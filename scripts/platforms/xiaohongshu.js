@@ -297,9 +297,11 @@ export class XiaohongshuParser extends PlatformParser {
   }
 
   _normalizeDuration(duration) {
-    if (typeof duration !== "number") return duration ?? null;
+    if (duration == null || duration === "") return null;
+    const numeric = Number(duration);
+    if (!Number.isFinite(numeric) || numeric < 0) return null;
     // Xiaohongshu fields vary by source: small values are seconds, large values are milliseconds.
-    return duration >= 1_000 ? Math.round(duration / 1000) : Math.round(duration);
+    return numeric >= 1_000 ? Math.round(numeric / 1000) : Math.round(numeric);
   }
 
   /**

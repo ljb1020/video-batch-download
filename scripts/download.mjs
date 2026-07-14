@@ -13,7 +13,8 @@ import { sleep, retryDelay, safeFilename, itemKey, isValidMp4, getVideoInfo, USE
 import { Semaphore } from "./utils/semaphore.js";
 import { StateStore } from "./utils/state-store.js";
 import { BrowserManager } from "./utils/browser-manager.js";
-import { extractAndRouteUrls } from "./platforms/router.js";
+import { validateParsedVideo } from "./platforms/base.js";
+import { extractAndRouteUrls, getPlatformId, loadPlatforms } from "./platforms/router.js";
 
 const TEMP_DIR_NAME = ".temp";
 const AUDIO_PROBE_TIMEOUT_MS = 30_000;
@@ -37,6 +38,7 @@ Download options:
   --clear-temp                   Delete the output .temp cache and exit
   --headed                       Show the browser for verification fallback
   --storage-state <file>         Optional Playwright storage-state JSON
+  --disable-platform <id>        Disable a discovered platform plugin; repeatable
 
 Transcription options:
   --no-transcribe                Skip Whisper transcription (download only)
@@ -184,6 +186,7 @@ function parseArgs(argv) {
     simplify: true,
     ffmpegPath: null,
     transcribeTimeoutMs: 600_000,
+    disabledPlatforms: [],
     texts: [],
   };
 
@@ -205,6 +208,9 @@ function parseArgs(argv) {
     else if (arg === "--no-video-output") options.videoOutput = false;
     else if (arg === "--clear-temp") options.clearTemp = true;
     else if (arg === "--storage-state") options.storageState = path.resolve(next());
+    else if (arg === "--disable-platform") {
+      options.disabledPlatforms.push(...next().split(",").map((value) => value.trim()).filter(Boolean));
+    }
     else if (arg === "--headed") options.headed = true;
     else if (arg === "--no-transcribe") options.transcribe = false;
     else if (arg === "--model") options.model = next();
@@ -862,7 +868,20 @@ async function main() {
   if (options.input) inputText += `\n${await fsp.readFile(options.input, "utf8")}`;
   inputText = inputText.replace(/^﻿/, ""); // strip UTF-8 BOM
 
-  const urlsWithParsers = extractAndRouteUrls(inputText);
+  const platformWarnings = [];
+  const platforms = await loadPlatforms({
+    disabledPlatforms: options.disabledPlatforms,
+    onWarning: (message) => {
+      platformWarnings.push(message);
+      console.warn(`[platforms] ${message}`);
+    },
+  });
+  console.error(
+    `[platforms] loaded ${platforms.length}: ` +
+      (platforms.map((ParserClass) => getPlatformId(ParserClass)).join(", ") || "none")
+  );
+
+  const urlsWithParsers = await extractAndRouteUrls(inputText, { platforms });
   if (urlsWithParsers.length === 0) {
     console.error("No supported video URLs were found.");
     process.exitCode = 2;
@@ -974,7 +993,10 @@ async function main() {
       try {
         ensureFfmpegAvailable(options.ffmpegPath);
         const parser = new ParserClass();
-        const parsed = await parseSemaphore.use(() => parser.parse(browserManager, url, options));
+        const parsed = validateParsedVideo(
+          await parseSemaphore.use(() => parser.parse(browserManager, url, options)),
+          getPlatformId(ParserClass),
+        );
 
         await store.update(url, {
           status: "downloading",
@@ -1244,6 +1266,8 @@ async function main() {
     transcribe: options.transcribe
       ? { model: options.model, device: options.device, computeType: options.computeType }
       : null,
+    platforms: platforms.map((ParserClass) => getPlatformId(ParserClass)),
+    platformWarnings,
     results: finalResults,
   };
 

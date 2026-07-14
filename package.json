@@ -1,12 +1,13 @@
 {
   "name": "video-batch-download",
-  "version": "3.1.0",
+  "version": "4.0.0",
   "private": true,
   "type": "module",
-  "description": "Douyin, Bilibili, Kuaishou & Xiaohongshu batch download and local transcription",
+  "description": "Pluggable multi-platform video download and local transcription",
   "scripts": {
     "setup": "node scripts/setup.mjs",
-    "download": "node scripts/download.mjs"
+    "download": "node scripts/download.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "playwright": "^1.53.0"

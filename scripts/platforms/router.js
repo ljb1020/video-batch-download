@@ -1,9 +1,9 @@
 import { DouyinParser } from "./douyin.js";
 import { BilibiliParser } from "./bilibili.js";
-// import { KuaishouParser } from "./kuaishou.js"; // 暂时禁用：快手反爬严格，未登录无法获取元数据
+import { KuaishouParser } from "./kuaishou.js";
 import { XiaohongshuParser } from "./xiaohongshu.js";
 
-const PARSERS = [DouyinParser, BilibiliParser, XiaohongshuParser];
+const PARSERS = [DouyinParser, BilibiliParser, KuaishouParser, XiaohongshuParser];
 
 /**
  * Route a URL to the appropriate platform parser.

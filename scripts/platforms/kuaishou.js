@@ -1,5 +1,5 @@
 import { PlatformParser } from "./base.js";
-import { sanitizeName, itemKey, sleep, settleWithin } from "../utils/common.js";
+import { itemKey, sleep, settleWithin } from "../utils/common.js";
 
 const URL_PATTERNS = [
   /^https?:\/\/(?:www\.)?kuaishou\.com\/short-video\//i,
@@ -21,17 +21,16 @@ export class KuaishouParser extends PlatformParser {
   async parse(browserManager, url, options) {
     const browser = await browserManager.start();
     const contextOptions = KuaishouParser.getBrowserContextOptions(browserManager, options);
-
     const context = await browser.newContext(contextOptions);
     const page = await context.newPage();
-    const candidates = [];
+    const mediaCandidates = [];
+    const interceptedDetails = new Map();
     let permanentReason = null;
+    let riskControlled = false;
 
-    const addCandidate = (candidate) => {
-      if (!candidate.url || candidates.some((item) => item.url === candidate.url)) {
-        return;
-      }
-      candidates.push(candidate);
+    const addMediaCandidate = (candidate) => {
+      if (!candidate.url || mediaCandidates.some((item) => item.url === candidate.url)) return;
+      mediaCandidates.push(candidate);
     };
 
     page.on("response", async (response) => {
@@ -39,13 +38,25 @@ export class KuaishouParser extends PlatformParser {
       const headers = response.headers();
       const contentType = headers["content-type"] ?? "";
 
-      // Intercept CDN video responses
-      if (/\.(mp4|m3u8)/i.test(responseUrl) || contentType.startsWith("video/")) {
-        if (/kwaicdn\.com|kuaishou\.com|djvod\.ndcimgs\.com|yximgs\.com|gifshow\.com/i.test(responseUrl)) {
-          const total = Number(
-            headers["content-range"]?.match(/\/(\d+)$/)?.[1] ?? headers["content-length"] ?? 0
-          );
-          addCandidate({ url: responseUrl, totalBytes: total, source: "media-response" });
+      if (headers["intercept-result"]?.includes("risk-control")) {
+        riskControlled = true;
+      }
+
+      if (this._isMediaUrl(responseUrl) || contentType.startsWith("video/")) {
+        const total = Number(
+          headers["content-range"]?.match(/\/(\d+)$/)?.[1] ?? headers["content-length"] ?? 0
+        );
+        addMediaCandidate({ url: responseUrl, totalBytes: total, source: "media-response" });
+      }
+
+      if (/\/graphql(?:[?#]|$)/i.test(responseUrl) && response.ok()) {
+        try {
+          const json = await response.json();
+          const detail = this._extractGraphqlDetail(json);
+          const photoId = detail?.photo?.id;
+          if (photoId) interceptedDetails.set(String(photoId), detail);
+        } catch (error) {
+          console.warn(`[kuaishou] failed to parse GraphQL response: ${error.message}`);
         }
       }
     });
@@ -56,74 +67,86 @@ export class KuaishouParser extends PlatformParser {
         timeout: options.pageTimeoutMs,
       });
 
-      // 等待页面加载和媒体响应
+      const finalUrl = page.url();
+      const targetVideoId = this._extractVideoId(finalUrl) ?? this._extractVideoId(url);
+      let pageDetail = null;
+
       const deadline = Date.now() + options.mediaWaitMs;
-      let firstSeenAt = null;
       while (Date.now() < deadline) {
-        if (candidates.length > 0) {
-          firstSeenAt ??= Date.now();
-          if (Date.now() - firstSeenAt >= 2_000) break;
+        if (targetVideoId) {
+          pageDetail ??= await this._extractDetailFromPage(page, targetVideoId);
+          if (pageDetail || interceptedDetails.has(targetVideoId)) break;
         }
         await sleep(250);
       }
 
-      const finalUrl = page.url();
-      const pageTitle = sanitizeName(await page.title().catch(() => ""));
-
-      // 从 URL 提取关键参数
-      const videoId = this._extractVideoId(finalUrl) ?? itemKey(url);
-      const userId = finalUrl.match(/userId=([^&]+)/)?.[1] ?? null;
-
-      // 检查永久性失败
       const bodyText = await page.locator("body").innerText({ timeout: 3_000 }).catch(() => "");
       if (/该视频已删除|视频不存在|暂无权限|该作品已删除|无法查看/u.test(bodyText)) {
         permanentReason = bodyText.match(/该视频已删除|视频不存在|暂无权限|该作品已删除|无法查看/u)?.[0];
       }
 
+      if (!targetVideoId) {
+        throw new Error("Could not determine the target Kuaishou photo ID after redirect");
+      }
+
+      const detail = pageDetail ?? interceptedDetails.get(targetVideoId) ?? null;
+      if (detail?.photo?.id && String(detail.photo.id) !== targetVideoId) {
+        throw new Error(`Kuaishou detail photo ID mismatch: expected ${targetVideoId}, got ${detail.photo.id}`);
+      }
+
+      const exactResponseCandidates = mediaCandidates.filter((candidate) =>
+        this._candidateMatchesVideoId(candidate.url, targetVideoId)
+      );
+      const detailCandidates = this._collectDetailMediaCandidates(detail?.photo);
+      const candidates = [...detailCandidates, ...exactResponseCandidates];
+
       if (candidates.length === 0) {
-        const challenge = /验证|滑块|captcha/i.test(bodyText);
+        const challenge = riskControlled || /验证|滑块|captcha|风控/i.test(bodyText);
         const reason = permanentReason ?? (challenge
           ? "Kuaishou verification challenge"
-          : `No media response (videoId: ${videoId})`);
+          : `No target media found (photoId: ${targetVideoId})`);
         const error = new Error(reason);
         error.permanent = Boolean(permanentReason);
         throw error;
       }
 
-      const mp4Candidates = candidates.filter((candidate) => !/\.m3u8(?:[?#]|$)/i.test(candidate.url));
-      if (mp4Candidates.length === 0) {
-        throw new Error("Only HLS playlist candidates were found; MP4 download is not supported for this video");
-      }
-
-      // Sort candidates by quality
-      mp4Candidates.sort((a, b) => this._candidateScore(b) - this._candidateScore(a));
-
-      // 快手未登录时显示推荐列表，当前视频元数据有限
-      // 从页面标题提取（去掉 "-快手" 后缀）
-      const title = pageTitle.replace(/[-_]快手$/, "").trim() || null;
+      candidates.sort((a, b) => this._candidateScore(b) - this._candidateScore(a));
+      const selected = candidates[0];
+      const rawPageTitle = await page.title().catch(() => "");
+      const pageTitle = rawPageTitle.replace(/[-_]快手\s*$/u, "").trim();
+      const photo = detail?.photo ?? {};
+      const authorData = detail?.author ?? {};
+      const caption = photo.caption ?? photo.originCaption ?? pageTitle ?? null;
+      const authorId = authorData.id ?? this._extractUserId(finalUrl);
 
       return {
         platform: KuaishouParser.getPlatformName(),
         sourceUrl: url,
         canonicalUrl: finalUrl,
-        videoId,
-        title,
+        videoId: targetVideoId ?? itemKey(url),
+        title: caption,
         author: {
-          nickname: null, // 快手未登录时无法获取作者名
-          uid: userId,
-          url: userId ? `https://www.kuaishou.com/profile/${userId}` : null,
+          nickname: authorData.name ?? null,
+          uid: authorId ? String(authorId) : null,
+          url: authorId ? `https://www.kuaishou.com/profile/${authorId}` : null,
         },
-        description: title, // 描述通常和标题一致
-        postTime: null,
-        duration: null,
-        statistics: {},
-        referer: "https://www.kuaishou.com/",
+        description: photo.originCaption ?? caption,
+        postTime: this._formatPostTime(photo.timestamp),
+        duration: this._normalizeDuration(photo.duration),
+        statistics: {
+          view_count: this._normalizeCount(photo.viewCount),
+          like_count: this._normalizeCount(photo.realLikeCount ?? photo.likeCount),
+          comment_count: this._normalizeCount(photo.commentCount),
+          share_count: this._normalizeCount(photo.shareCount),
+        },
+        referer: finalUrl,
         mediaStreams: [
           {
-            url: mp4Candidates[0].url,
+            url: selected.url,
             type: "video+audio",
             format: "mp4",
-            referer: "https://www.kuaishou.com/",
+            quality: selected.height ?? null,
+            referer: finalUrl,
           },
         ],
       };
@@ -132,19 +155,148 @@ export class KuaishouParser extends PlatformParser {
     }
   }
 
+  _extractGraphqlDetail(json) {
+    const detail = json?.data?.visionVideoDetail;
+    if (!detail?.photo?.id) return null;
+    return detail;
+  }
+
+  async _extractDetailFromPage(page, targetVideoId) {
+    return await page.evaluate((photoId) => {
+      const state = window.__APOLLO_STATE__?.defaultClient;
+      if (!state || typeof state !== "object") return null;
+
+      const resolveRef = (value) => {
+        if (!value || typeof value !== "object") return value;
+        if (value.type === "json") return value.json;
+        if (typeof value.id === "string" && state[value.id]) return state[value.id];
+        return value;
+      };
+
+      const detailKey = Object.keys(state).find((key) =>
+        key.startsWith("$ROOT_QUERY.visionVideoDetail") && key.includes(photoId)
+      );
+      const detail = detailKey ? state[detailKey] : null;
+      const photo = resolveRef(detail?.photo) ?? state[`VisionVideoDetailPhoto:${photoId}`] ?? null;
+      if (!photo || String(photo.id) !== String(photoId)) return null;
+
+      return {
+        status: detail?.status ?? null,
+        type: detail?.type ?? null,
+        author: resolveRef(detail?.author) ?? null,
+        photo,
+      };
+    }, targetVideoId).catch(() => null);
+  }
+
+  _collectDetailMediaCandidates(photo) {
+    if (!photo || typeof photo !== "object") return [];
+    const candidates = [];
+    const seen = new Set();
+    const add = (url, metadata = {}) => {
+      if (!url || typeof url !== "string" || !/^https?:\/\//i.test(url) || seen.has(url)) return;
+      if (!this._isMediaUrl(url)) return;
+      seen.add(url);
+      candidates.push({ url, source: "target-detail", ...metadata });
+    };
+
+    add(photo.photoUrl, { codec: "h264", priority: 4 });
+    this._collectManifestCandidates(photo.videoResource?.json?.h264 ?? photo.videoResource?.h264, add, {
+      codec: "h264",
+      priority: 3,
+    });
+    this._collectManifestCandidates(photo.manifest?.json ?? photo.manifest, add, {
+      codec: "h264",
+      priority: 2,
+    });
+    add(photo.photoH265Url, { codec: "hevc", priority: 1 });
+    this._collectManifestCandidates(photo.manifestH265?.json ?? photo.manifestH265, add, {
+      codec: "hevc",
+      priority: 0,
+    });
+    return candidates;
+  }
+
+  _collectManifestCandidates(manifest, add, defaults = {}) {
+    for (const set of manifest?.adaptationSet ?? []) {
+      for (const representation of set?.representation ?? []) {
+        add(representation?.url, {
+          ...defaults,
+          width: representation?.width ?? null,
+          height: representation?.height ?? null,
+          bitrate: representation?.avgBitrate ?? representation?.maxBitrate ?? 0,
+          totalBytes: representation?.fileSize ?? 0,
+        });
+        for (const backupUrl of representation?.backupUrl ?? []) {
+          add(backupUrl, {
+            ...defaults,
+            width: representation?.width ?? null,
+            height: representation?.height ?? null,
+            bitrate: representation?.avgBitrate ?? representation?.maxBitrate ?? 0,
+            totalBytes: representation?.fileSize ?? 0,
+          });
+        }
+      }
+    }
+  }
+
   _extractVideoId(url) {
-    return url.match(/\/short-video\/([\w-]+)/)?.[1] ?? url.match(/\/f\/([\w-]+)/)?.[1] ?? null;
+    return url.match(/\/short-video\/([\w-]+)/i)?.[1]
+      ?? url.match(/\/f\/([\w-]+)/i)?.[1]
+      ?? url.match(/[?&]photoId=([\w-]+)/i)?.[1]
+      ?? null;
+  }
+
+  _extractUserId(url) {
+    try {
+      return new URL(url).searchParams.get("userId");
+    } catch {
+      return null;
+    }
+  }
+
+  _isMediaUrl(url) {
+    return /^https?:\/\//i.test(url)
+      && /(?:\.mp4(?:[?#]|$)|djvod\.ndcimgs\.com|kwaicdn\.com|yximgs\.com|gifshow\.com)/i.test(url);
+  }
+
+  _candidateMatchesVideoId(url, videoId) {
+    if (!url || !videoId) return false;
+    try {
+      return decodeURIComponent(url).includes(videoId);
+    } catch {
+      return url.includes(videoId);
+    }
   }
 
   _candidateScore(candidate) {
-    let qualityBoost = 0;
-    try {
-      const u = new URL(candidate.url);
-      const tag = u.searchParams.get("tag") ?? "";
-      if (tag.includes("hd")) qualityBoost += 1000;
-      if (tag.includes("hd1")) qualityBoost += 500;
-      if (tag.includes("hd2")) qualityBoost += 800;
-    } catch {}
-    return (candidate.totalBytes ?? 0) * 10 + qualityBoost;
+    const priority = candidate.priority ?? -1;
+    const pixels = Number(candidate.width ?? 0) * Number(candidate.height ?? 0);
+    const bitrate = Number(candidate.bitrate ?? 0);
+    const bytes = Number(candidate.totalBytes ?? 0);
+    return priority * 1e15 + pixels * 1e6 + bitrate * 1e3 + bytes;
+  }
+
+  _normalizeDuration(value) {
+    const duration = Number(value);
+    if (!Number.isFinite(duration) || duration <= 0) return null;
+    return duration > 1_000 ? Math.round(duration / 100) / 10 : duration;
+  }
+
+  _formatPostTime(value) {
+    const timestamp = Number(value);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+    const millis = timestamp < 1e12 ? timestamp * 1_000 : timestamp;
+    return new Date(millis).toISOString().replace("T", " ").slice(0, 19);
+  }
+
+  _normalizeCount(value) {
+    if (value == null || value === "") return null;
+    if (typeof value === "number") return Number.isFinite(value) ? value : null;
+    const text = String(value).trim().replace(/,/g, "");
+    const match = text.match(/^([\d.]+)\s*([万亿])?$/u);
+    if (!match) return value;
+    const multiplier = match[2] === "亿" ? 100_000_000 : match[2] === "万" ? 10_000 : 1;
+    return Math.round(Number(match[1]) * multiplier);
   }
 }

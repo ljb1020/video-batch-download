@@ -23,6 +23,7 @@
 | -------------- | --------: | ------------------------------------ |
 | 抖音           | ✅ 已支持 | 公开视频；支持合流/分离流下载与合并  |
 | B站 / Bilibili | ✅ 已支持 | 公开视频；支持 DASH 合并与播放流兜底 |
+| 快手           | ✅ 已支持 | 公开视频；按作品 ID 精确读取页面详情 |
 | 小红书         | ✅ 已支持 | 公开视频笔记；支持笔记定位与媒体兜底 |
 | 更多平台       | 🚧 计划中 | 可通过平台适配层继续扩展             |
 
@@ -33,7 +34,7 @@
 - **本地语音转写**：通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 在本地生成文案，不依赖云 API；可选 [OpenCC](https://github.com/BYVoid/OpenCC) 繁→简转换。
 - **结构化输出**：保存视频元数据、TXT 文案和 JSON 结果。
 - **分离流支持**：B站和抖音遇到视频/音频分离媒体流时，会自动下载并通过 ffmpeg 合并。
-- **运行时兜底**：结合平台 API、页面状态和浏览器实际观察到的媒体响应，提高 B站/抖音/小红书稳定性。
+- **运行时兜底**：结合平台 API、页面状态和浏览器实际观察到的媒体响应，提高 B站/抖音/快手/小红书稳定性。
 - **媒体轨道校验**：只有最终 MP4 同时包含视频轨和音频轨，才会被标记为完成。
 - **断点续跑**：重复运行时可跳过已完成下载和已有转写结果；失败项支持指数退避重试。
 - **Agent Skill 可用**：可作为 Claude / Codex 类助手的 Skill 使用。
@@ -57,6 +58,7 @@
 - B站高画质视频需要 ffmpeg 合并 DASH 流
 - 抖音可能返回视频/音频分离流；纯音频资源会被拒绝，不会误存为视频
 - 小红书仅支持视频笔记，不支持图文笔记；公开视频笔记即使出现登录弹窗，也可能通过页面状态和媒体响应解析
+- 快手按重定向后的作品 ID 匹配 Apollo/GraphQL 详情，避免误下载推荐流；风控页面需要稍后重试或使用有头模式
 - 短分享链接可能过期或跳转到无关推荐页；可用时优先使用平台规范 URL
 - 转写仅限语音内容，不包含屏幕文字识别
 
@@ -97,6 +99,7 @@ git clone https://github.com/ljb1020/video-batch-download.git %USERPROFILE%\.cla
 > "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
 > "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
 > "下载这个小红书视频 http://xhslink.com/xxxxx"
+> "下载这个快手视频 https://v.kuaishou.com/xxxxx"
 
 ### 作为命令行工具安装
 
@@ -135,6 +138,7 @@ node scripts/download.mjs "https://v.douyin.com/xxxxx" --no-transcribe
 ```bash
 node scripts/download.mjs "https://v.douyin.com/xxxxx"
 node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
+node scripts/download.mjs "https://v.kuaishou.com/xxxxx"
 node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
 ```
 
@@ -142,7 +146,7 @@ node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
 
 ```bash
 # 支持混合平台
-node scripts/download.mjs "url1" "url2" "url3"
+node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "https://v.kuaishou.com/xxxxx" "http://xhslink.com/xxxxx"
 
 # 自定义输出目录
 node scripts/download.mjs "url" --output ./my_output

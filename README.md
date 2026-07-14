@@ -23,6 +23,7 @@
 | -------------- | ------------: | ------------------------------------------------- |
 | Douyin         | ✅ Supported  | Public videos; merged/separated stream handling   |
 | Bilibili       | ✅ Supported  | Public videos; DASH merge and playurl fallbacks   |
+| Kuaishou       | ✅ Supported  | Public videos; exact photo-ID page-state matching |
 | Xiaohongshu    | ✅ Supported  | Public video notes; note and media fallbacks      |
 | More platforms |    🚧 Planned | Extendable through the platform adapter layer     |
 
@@ -33,7 +34,7 @@
 - **Local transcription** — uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) to generate transcripts without cloud APIs; optional Traditional→Simplified conversion via [OpenCC](https://github.com/BYVoid/OpenCC).
 - **Structured output** — saves metadata, transcript text, and JSON output locally.
 - **Separated stream support** — downloads and merges separated video/audio streams with ffmpeg for Bilibili and Douyin when needed.
-- **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Xiaohongshu reliability.
+- **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Kuaishou/Xiaohongshu reliability.
 - **Media track validation** — treats an item as completed only after the final MP4 has both video and audio tracks.
 - **Resumable workflow** — reruns can skip completed downloads and existing transcripts; failed items auto-retry with exponential backoff.
 - **Agent Skill ready** — can be installed as a Claude/Codex-style assistant skill.
@@ -57,6 +58,7 @@ Additional practical limits:
 - Bilibili high-quality videos require ffmpeg for DASH stream merging
 - Douyin may return separated video/audio streams; audio-only resources are rejected instead of being saved as videos
 - Xiaohongshu image/text notes are not supported (video notes only); public video notes can still work when a login overlay is shown
+- Kuaishou matches Apollo/GraphQL detail data by the redirected photo ID to avoid downloading recommendation feeds; risk-control pages may require a later retry or headed mode
 - Short share links may expire or redirect to unrelated feed pages; use canonical URLs when available
 - Transcription is speech-only; on-screen text is not captured
 
@@ -97,6 +99,7 @@ In Claude Code, paste a public video link and ask for download or transcript ext
 > "帮我提取这个抖音视频的文案 https://v.douyin.com/xxxxx"
 > "提取这个B站视频的语音 https://www.bilibili.com/video/BVxxxxx"
 > "下载这个小红书视频 http://xhslink.com/xxxxx"
+> "下载这个快手视频 https://v.kuaishou.com/xxxxx"
 
 ### Install as a CLI Tool
 
@@ -135,6 +138,7 @@ node scripts/download.mjs "https://v.douyin.com/xxxxx" --no-transcribe
 ```bash
 node scripts/download.mjs "https://v.douyin.com/xxxxx"
 node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
+node scripts/download.mjs "https://v.kuaishou.com/xxxxx"
 node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
 ```
 
@@ -142,7 +146,7 @@ node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
 
 ```bash
 # Mixed platforms are supported
-node scripts/download.mjs "url1" "url2" "url3"
+node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "https://v.kuaishou.com/xxxxx" "http://xhslink.com/xxxxx"
 
 # Custom output directory
 node scripts/download.mjs "url" --output ./my_output

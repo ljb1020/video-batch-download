@@ -1,21 +1,21 @@
 ---
 name: video-batch-download
-description: "Use this skill when the user provides 抖音 (Douyin), B站 (Bilibili), or 小红书 (Xiaohongshu) video URLs and wants to download videos, extract metadata, transcribe audio with local Whisper, convert Traditional→Simplified Chinese, or get structured transcripts as JSON/TXT."
+description: "Use this skill when the user provides 抖音 (Douyin), B站 (Bilibili), 快手 (Kuaishou), or 小红书 (Xiaohongshu) video URLs and wants to download videos, extract metadata, transcribe audio with local Whisper, convert Traditional→Simplified Chinese, or get structured transcripts as JSON/TXT."
 license: MIT
 metadata:
     version: "3.1.0"
 ---
 
-# Video Batch Download & Transcribe (Douyin, Bilibili & Xiaohongshu)
+# Video Batch Download & Transcribe (Douyin, Bilibili, Kuaishou & Xiaohongshu)
 
-Download public videos from Douyin, Bilibili and Xiaohongshu, extract transcripts — fully locally, no cloud APIs.
+Download public videos from Douyin, Bilibili, Kuaishou and Xiaohongshu, extract transcripts — fully locally, no cloud APIs.
 
 ## When to use
 
-- User pastes one or more 抖音, B站, or 小红书 links and wants the spoken content as text
-- User says "提取文案", "语音转文字", "下载抖音视频", "下载B站视频", "下载小红书视频", or gives a Douyin/Bilibili/Xiaohongshu URL
-- User wants structured metadata (title, author, stats, post time) from Douyin, Bilibili or Xiaohongshu posts
-- User wants batch download and/or transcription of videos from Douyin, Bilibili or Xiaohongshu
+- User pastes one or more 抖音, B站, 快手, or 小红书 links and wants the spoken content as text
+- User says "提取文案", "语音转文字", "下载抖音视频", "下载B站视频", "下载快手视频", "下载小红书视频", or gives a supported URL
+- User wants structured metadata (title, author, stats, post time) from supported public video posts
+- User wants batch download and/or transcription of videos from the supported platforms
 
 ## First run
 
@@ -40,7 +40,7 @@ Default transcription uses `medium + cuda + float16 + zh`, which works best on m
 
 ## Workflow
 
-1. **Receive URLs** — User provides one or more Douyin, Bilibili or Xiaohongshu links (or share text containing links). The script auto-extracts valid URLs from any text and routes them to the appropriate platform parser.
+1. **Receive URLs** — User provides one or more Douyin, Bilibili, Kuaishou or Xiaohongshu links (or share text containing links). The script auto-extracts valid URLs from any text and routes them to the appropriate platform parser.
 2. **Ask for output directory** — If user doesn't specify, default to `./video_results/`.
 3. **Run the script** — Parallel pipeline:
     - Parse video metadata via Playwright browser interception, page state, and runtime media fallbacks (concurrency 1 by default for stability)
@@ -57,6 +57,8 @@ Default transcription uses `medium + cuda + float16 + zh`, which works best on m
 
 ```bash
 node scripts/download.mjs "https://v.douyin.com/xxxxx"
+node scripts/download.mjs "https://www.bilibili.com/video/BVxxxxx"
+node scripts/download.mjs "https://v.kuaishou.com/xxxxx"
 node scripts/download.mjs "https://www.xiaohongshu.com/explore/xxxxx"
 ```
 
@@ -75,7 +77,7 @@ node scripts/download.mjs "url" --output ./my_output
 ### Mixed platforms
 
 ```bash
-node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "http://xhslink.com/xxxxx"
+node scripts/download.mjs "https://v.douyin.com/xxxxx" "https://www.bilibili.com/video/BVxxxxx" "https://v.kuaishou.com/xxxxx" "http://xhslink.com/xxxxx"
 ```
 
 ### From a text file
@@ -233,10 +235,11 @@ By default, the final MP4 is copied into the per-video folder. The `.temp` direc
 
 ## Important notes
 
-- Supports Douyin (抖音), Bilibili (B站), and Xiaohongshu (小红书) platforms
+- Supports Douyin (抖音), Bilibili (B站), Kuaishou (快手), and Xiaohongshu (小红书) platforms
 - Bilibili high-quality videos use DASH format (separate video/audio streams) — automatically merged with ffmpeg; if page interception misses `playurl`, the parser falls back to page `__playinfo__` and direct `x/player/playurl` requests.
 - Douyin may expose merged MP4 or separated `media-video-*` / `media-audio-*` streams; audio-only resources are never treated as completed videos.
 - Xiaohongshu: video notes only; image/text notes are not supported. Login overlays may still expose public video-note state, so parser checks the target note state and media responses before failing.
+- Kuaishou resolves short links, matches Apollo/GraphQL detail data by the target photo ID, and rejects unrelated recommendation media.
 - Downloaded or merged MP4 files must contain both video and audio tracks; otherwise the item is retried instead of producing a misleading success.
 - Short share links can expire or redirect to unrelated feed pages; if that happens, use the canonical platform URL when available.
 - First Whisper model use downloads ~500 MB — this is normal, not a hang.
@@ -253,7 +256,7 @@ By default, the final MP4 is copied into the per-video folder. The `.temp` direc
 
 ## Boundaries
 
-- Platforms: Douyin (抖音), Bilibili (B站), and Xiaohongshu (小红书).
+- Platforms: Douyin (抖音), Bilibili (B站), Kuaishou (快手), and Xiaohongshu (小红书).
 - Process only publicly accessible content the user is permitted to access.
 - Do not use third-party online parsing or transcription APIs.
 

@@ -1,5 +1,11 @@
 # Example: Extract transcript from a single Douyin video
 
+Kuaishou public-video links are also accepted, including short links such as:
+
+```bash
+node scripts/download.mjs "https://v.kuaishou.com/xxxxx" --no-transcribe
+```
+
 ## Input
 
 ```bash

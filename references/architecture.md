@@ -2,12 +2,13 @@
 
 ## 一、需求概述
 
-**输入**：一个或多个抖音/B站/小红书分享链接（可从分享文本中自动提取）
+**输入**：一个或多个抖音/B站/快手/小红书分享链接（可从分享文本中自动提取）
 **输出**：每条视频的结构化信息，包含平台名、发帖人、发帖时间、视频标题、视频描述、视频文案（语音转文字）
 
 **支持平台**：
 - 抖音（Douyin）— 合流 MP4 或视频/音频分离流，自动合并并校验轨道
 - B站（Bilibili）— DASH 多流（视频+音频分离）自动合并，支持播放流兜底
+- 快手（Kuaishou）— 按目标作品 ID 读取 Apollo/GraphQL 详情和 H.264 MP4
 - 小红书（Xiaohongshu）— 视频笔记单流 MP4，支持目标笔记状态和媒体响应兜底
 
 ---
@@ -28,6 +29,7 @@
 │                                             │
 │  v.douyin.com → DouyinParser                │
 │  bilibili.com/video → BilibiliParser        │
+│  v.kuaishou.com → KuaishouParser            │
 │  xiaohongshu.com / xhslink.com → XiaohongshuParser │
 └──────────────────┬──────────────────────────┘
                    ↓
@@ -48,6 +50,10 @@
 │      必要时主动请求 x/player/playurl        │
 │      返回 DASH 双流或单流 fallback           │
 │                                             │
+│  ├─ KuaishouParser (快手)                   │
+│  │   按 photoId 读取 Apollo/GraphQL 详情      │
+│  │   仅接受目标作品的 MP4，拒绝推荐流          │
+│  │                                          │
 │  └─ XiaohongshuParser (小红书)              │
 │      按目标 noteId 读取 __INITIAL_STATE__   │
 │      拦截/兜底 xhscdn 视频响应              │
@@ -141,7 +147,17 @@ mediaStreams: [{
 3. 删除分轨中间文件，保留合并后的 `.temp/<media-key>.mp4` 作为缓存
 4. 默认将最终 MP4 复制/硬链接到每条视频结果目录；传 `--no-video-output` 时只保留 `.temp` 缓存
 
-### 3.3 小红书（XiaohongshuParser）
+### 3.3 快手（KuaishouParser）
+
+**数据来源**：
+- 短链接重定向后的 `/short-video/<photoId>` 用于锁定目标作品
+- 页面 `window.__APOLLO_STATE__` 中的 `VisionVideoDetailPhoto:<photoId>` 提供详情与 H.264 MP4
+- `visionVideoDetail` GraphQL 响应作为客户端渲染场景的补充来源
+- 浏览器媒体响应只在 URL 可确认包含目标 `photoId` 时作为兜底，避免误选 `visionShortVideoReco` 推荐流
+
+**输出**：单个带音轨的 H.264 MP4，并包含作者、标题、发布时间、时长、播放量和点赞量等元数据。
+
+### 3.4 小红书（XiaohongshuParser）
 
 **API / 媒体来源**：
 - `/api/sns/web/v1/feed` — 笔记元数据候选
@@ -169,7 +185,7 @@ mediaStreams: [{
 ```
 ┌────────────────────────────────────────────┐
 │                 输入层                       │
-│  一个或多个视频分享链接或分享文本（支持抖音/B站/小红书）│
+│  一个或多个视频分享链接或分享文本（支持抖音/B站/快手/小红书）│
 └──────────────────┬─────────────────────────┘
                    ▼
 ┌────────────────────────────────────────────┐
@@ -495,6 +511,7 @@ Python 脚本只做转写（faster-whisper + OpenCC），纯函数，输入 WAV 
 | Douyin 浏览器拦截获取 CDN URL | ✅ 已实现 |
 | Bilibili 浏览器拦截获取播放 URL | ✅ 已实现 |
 | Bilibili DASH 多流自动合并 | ✅ 已实现 |
+| Kuaishou 目标作品 Apollo/GraphQL 精确解析 | ✅ 已实现 |
 | Detail API 元数据提取 | ✅ 已实现 |
 | MP4 下载（默认 1 并发，可配置） | ✅ 已实现 |
 | 失败自动重试（指数退避） | ✅ 已实现 |

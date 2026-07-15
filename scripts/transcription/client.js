@@ -4,6 +4,11 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_STOP_GRACE_MS = 3_000;
+const CUDA_ERROR_PATTERN = /\b(?:cuda|cudnn|cublas|gpu|nvidia|float16)\b|compute[_ -]?type[^\n]*float16|libcudnn|cudart/i;
+
+export function isCudaRuntimeError(error) {
+  return CUDA_ERROR_PATTERN.test(error?.message ?? String(error ?? ""));
+}
 
 function getScriptsDir() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -16,6 +21,8 @@ function getScriptsDir() {
 export class TranscriptionClient {
   constructor(options, dependencies = {}) {
     this.options = options;
+    this.activeOptions = { ...options };
+    this.fallbackReason = null;
     this.activeChildren = dependencies.activeChildren ?? null;
     this.stderr = dependencies.stderr ?? process.stderr;
     this.spawn = dependencies.spawn ?? spawn;
@@ -32,6 +39,16 @@ export class TranscriptionClient {
   }
 
   async start() {
+    try {
+      return await this.#startConfigured();
+    } catch (error) {
+      if (!this.#canFallback(error)) throw error;
+      await this.#activateCpuFallback(error);
+      return await this.#startConfigured();
+    }
+  }
+
+  async #startConfigured() {
     if (this.ready && this.process) return;
     if (this.readyPromise && this.process) return this.readyPromise;
 
@@ -51,9 +68,9 @@ export class TranscriptionClient {
       }
       proc = this.spawn(pyExe, [
         serverPath,
-        "--model", this.options.model,
-        "--device", this.options.device,
-        "--compute-type", this.options.computeType,
+        "--model", this.activeOptions.model,
+        "--device", this.activeOptions.device,
+        "--compute-type", this.activeOptions.computeType,
       ], {
         stdio: ["pipe", "pipe", "pipe"],
         cwd: scriptsDir,
@@ -70,9 +87,11 @@ export class TranscriptionClient {
     this.process = proc;
     this.ready = false;
     this.responseBuffer = "";
+    let startupStderr = "";
     this.readyPromise = new Promise((resolve, reject) => {
       proc.stderr.on("data", (chunk) => {
         const msg = chunk.toString();
+        startupStderr = `${startupStderr}${msg}`.slice(-4_000);
         this.stderr.write(msg);
         if (proc === this.process && !this.ready && msg.includes("[server] model loaded")) {
           this.ready = true;
@@ -90,7 +109,10 @@ export class TranscriptionClient {
         this.process = null;
         this.ready = false;
         this.readyPromise = null;
-        const err = new Error(`transcribe_server exited (code ${code})`);
+        const detail = startupStderr.trim();
+        const err = new Error(
+          `transcribe_server exited (code ${code})${detail ? `: ${detail}` : ""}`,
+        );
         if (!wasReady) reject(err);
         this.#resolvePendingWithError(err.message);
       });
@@ -122,10 +144,21 @@ export class TranscriptionClient {
     return this.start();
   }
 
-  transcribe(wavPath, overrides = {}) {
+  async transcribe(wavPath, overrides = {}) {
+    try {
+      return await this.#transcribeOnce(wavPath, overrides);
+    } catch (error) {
+      if (!this.#canFallback(error)) throw error;
+      await this.#activateCpuFallback(error);
+      await this.#startConfigured();
+      return await this.#transcribeOnce(wavPath, overrides);
+    }
+  }
+
+  #transcribeOnce(wavPath, overrides = {}) {
     if (!this.process) throw new Error("transcribe server not running");
 
-    const options = { ...this.options, ...overrides };
+    const options = { ...this.activeOptions, ...overrides };
     const request = {
       wav_path: wavPath,
       model: options.model,
@@ -139,7 +172,10 @@ export class TranscriptionClient {
       const resolver = (result) => {
         clearTimeout(timer);
         if (result.error) reject(new Error(result.error));
-        else resolve(result);
+        else {
+          result.meta = { ...(result.meta ?? {}), fallback_reason: this.fallbackReason };
+          resolve(result);
+        }
       };
       const timer = setTimeout(() => {
         this.#removePending(resolver);
@@ -156,6 +192,37 @@ export class TranscriptionClient {
         reject(new Error(`write to server failed: ${err.message}`));
       }
     });
+  }
+
+  getRuntimeConfig() {
+    return {
+      model: this.activeOptions.model,
+      device: this.activeOptions.device,
+      compute_type: this.activeOptions.computeType,
+      fallback_reason: this.fallbackReason,
+    };
+  }
+
+  #canFallback(error) {
+    return !this.fallbackReason &&
+      this.activeOptions.device === "cuda" &&
+      !this.options.deviceExplicit &&
+      !this.options.computeTypeExplicit &&
+      isCudaRuntimeError(error);
+  }
+
+  async #activateCpuFallback(error) {
+    this.fallbackReason = error.message;
+    this.activeOptions = {
+      ...this.activeOptions,
+      model: this.options.modelExplicit ? this.options.model : "small",
+      device: "cpu",
+      computeType: "int8",
+    };
+    this.stderr.write(
+      `[transcribe] CUDA unavailable; falling back to ${this.activeOptions.model} (cpu/int8)\n`,
+    );
+    this.close("Switching transcription to CPU fallback");
   }
 
   close(reason = "transcribe server stopped") {

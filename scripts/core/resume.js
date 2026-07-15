@@ -21,10 +21,12 @@ export function getTranscriptPathFromJsonPath(jsonPath) {
 }
 
 export async function hasReusableTranscriptOutput(state) {
-  if (!state?.hasTranscript || state?.status !== "completed" || !state?.jsonPath) {
+  if (state?.status !== "completed" || !state?.jsonPath) {
     return false;
   }
   if (!(await fileExists(state.jsonPath))) return false;
+  if (state.transcriptionCompleted && !state.hasTranscript) return true;
+  if (!state.hasTranscript) return false;
   return await fileExists(getTranscriptPathFromJsonPath(state.jsonPath));
 }
 

@@ -66,8 +66,10 @@
     "language": "zh",
     "language_probability": 0.98,
     "device": "cuda",
-    "compute_type": "float16"
+    "compute_type": "float16",
+    "fallback_reason": null
   },
+  "transcription_error": null,
   "quality": {
     "access_mode": "anonymous",
     "selection_version": "anonymous-best-v1",

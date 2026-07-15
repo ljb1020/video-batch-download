@@ -8,25 +8,42 @@ import {
 import { extractAudio } from "../media/ffmpeg.js";
 import { writeOutputsWithMediaInfo } from "../output/writer.js";
 
-async function writeCompletedItem({ url, state, transcribeResult, errorMessage, options, store }) {
+export async function writeOutputItem({
+  url,
+  state,
+  transcribeResult,
+  errorMessage,
+  status = "completed",
+  runtimeConfig = null,
+  options,
+  store,
+  writeOutputs = writeOutputsWithMediaInfo,
+}) {
   const cacheVideoPath = getCacheVideoPath(state);
   const {
     jsonPath,
     videoFilePath,
     videoOutput,
     cacheVideoPath: outputCacheVideoPath,
-  } = await writeOutputsWithMediaInfo(
+  } = await writeOutputs(
     state.parsed,
     transcribeResult,
     { filePath: cacheVideoPath, bytes: state.bytes },
     options.output,
-    options,
+    {
+      ...options,
+      processingStatus: status === "completed" ? "success" : status,
+      transcriptionError: errorMessage,
+      transcriptionRuntime: runtimeConfig,
+    },
   );
 
   await store.update(url, {
-    status: "completed",
+    status,
     jsonPath,
     hasTranscript: Boolean(transcribeResult?.transcript),
+    transcriptionCompleted: Boolean(transcribeResult),
+    transcription: transcribeResult?.meta ?? runtimeConfig,
     videoFilePath,
     videoOutput,
     cacheVideoPath: outputCacheVideoPath,
@@ -46,7 +63,7 @@ export async function finalizeWithoutTranscription({ urlsWithParsers, options, s
   console.error(`[phase 1.5] writing outputs for ${downloaded.length} video(s) (transcription skipped)...`);
   for (const { url, state } of downloaded) {
     try {
-      const jsonPath = await writeCompletedItem({
+      const jsonPath = await writeOutputItem({
         url,
         state,
         transcribeResult: null,
@@ -105,15 +122,17 @@ export async function runTranscriptionPhase({
     console.error(`[phase 2] failed to start transcribe server: ${error.message}`);
     for (const { url, state } of pending) {
       try {
-        const jsonPath = await writeCompletedItem({
+        const jsonPath = await writeOutputItem({
           url,
           state,
           transcribeResult: null,
-          errorMessage: "Transcription server failed to start",
+          errorMessage: error.message,
+          status: "transcription_failed",
+          runtimeConfig: transcriber.getRuntimeConfig?.() ?? null,
           options,
           store,
         });
-        console.error(`  completed without transcript: ${jsonPath}`);
+        console.error(`  transcription failed; video and metadata preserved: ${jsonPath}`);
       } catch (writeError) {
         await store.update(url, { status: "failed", lastError: writeError.message });
       }
@@ -134,10 +153,13 @@ export async function runTranscriptionPhase({
         await store.update(url, { status: "transcribing" });
         console.error(`${label} extracting audio...`);
         wavPath = await extractAudio(cacheVideoPath, options.ffmpegPath);
-        console.error(`${label} transcribing (${options.model}, ${options.device})...`);
+        const runtime = transcriber.getRuntimeConfig?.() ?? options;
+        console.error(
+          `${label} transcribing (${runtime.model}, ${runtime.device}/${runtime.compute_type ?? runtime.computeType})...`,
+        );
 
         const transcribeResult = await transcriber.transcribe(wavPath);
-        const jsonPath = await writeCompletedItem({
+        const jsonPath = await writeOutputItem({
           url,
           state,
           transcribeResult,
@@ -149,15 +171,17 @@ export async function runTranscriptionPhase({
       } catch (error) {
         console.warn(`${label} transcribe failed: ${error.message}`);
         try {
-          const jsonPath = await writeCompletedItem({
+          const jsonPath = await writeOutputItem({
             url,
             state,
             transcribeResult: null,
             errorMessage: error.message,
+            status: "transcription_failed",
+            runtimeConfig: transcriber.getRuntimeConfig?.() ?? null,
             options,
             store,
           });
-          console.error(`${label} completed without transcript: ${jsonPath}`);
+          console.error(`${label} transcription failed; video and metadata preserved: ${jsonPath}`);
         } catch (writeError) {
           await store.update(url, { status: "failed", lastError: writeError.message });
         }

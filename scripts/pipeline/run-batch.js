@@ -15,7 +15,7 @@ import { StateStore } from "../utils/state-store.js";
 import { runDownloadPhase } from "./download-phase.js";
 import { finalizeWithoutTranscription, runTranscriptionPhase } from "./transcribe-phase.js";
 
-async function buildSummary({ urlsWithParsers, options, store, accessMode, platforms, platformWarnings }) {
+export async function buildSummary({ urlsWithParsers, options, store, accessMode, platforms, platformWarnings }) {
   const urls = urlsWithParsers.map(({ url }) => url);
   const finalResults = await Promise.all(urls.map(async (url) => {
     const state = store.get(url);
@@ -30,6 +30,7 @@ async function buildSummary({ urlsWithParsers, options, store, accessMode, platf
       cacheVideoFile: await getExistingCacheVideoPath(state),
       bytes: state?.bytes,
       hasTranscript: state?.hasTranscript ?? false,
+      transcription: state?.transcription ?? null,
       lastError: state?.lastError,
     };
   }));
@@ -38,6 +39,7 @@ async function buildSummary({ urlsWithParsers, options, store, accessMode, platf
     total: urls.length,
     completed: finalResults.filter((result) => result.status === "completed").length,
     withTranscript: finalResults.filter((result) => result.hasTranscript).length,
+    transcriptionFailed: finalResults.filter((result) => result.status === "transcription_failed").length,
     failed: finalResults.filter((result) => result.status === "failed").length,
     permanentFailures: finalResults.filter((result) => result.status === "permanent_failure").length,
     outputDir: options.output,
@@ -49,7 +51,12 @@ async function buildSummary({ urlsWithParsers, options, store, accessMode, platf
     videosOutput: finalResults.filter((result) => result.videoOutput && result.videoFile).length,
     videosInCache: finalResults.filter((result) => result.cacheVideoFile).length,
     transcribe: options.transcribe
-      ? { model: options.model, device: options.device, computeType: options.computeType }
+      ? {
+          requested: { model: options.model, device: options.device, compute_type: options.computeType },
+          actual: finalResults
+            .map((result) => result.transcription)
+            .filter(Boolean),
+        }
       : null,
     platforms: platforms.map((ParserClass) => getPlatformId(ParserClass)),
     platformWarnings,
@@ -158,7 +165,9 @@ export async function runBatch(options) {
     });
     await writeBatchSummary(options.output, summary);
 
-    const hasFailures = summary.failed > 0 || summary.permanentFailures > 0;
+    const hasFailures = summary.failed > 0 ||
+      summary.permanentFailures > 0 ||
+      summary.transcriptionFailed > 0;
     const exitCode = summary.completed === summary.total && !hasFailures ? 0 : 1;
     return { exitCode, summary };
   } finally {

@@ -25,11 +25,13 @@ Transcription options:
   --no-transcribe                Skip Whisper transcription (download only)
   --model <name>                 Whisper model: small, medium, large-v3 (default: medium)
   --language <code>              Language hint, auto = detect (default: zh)
-  --device <cpu|cuda>            Transcription device (default: cuda)
-  --compute-type <type>          Precision: int8, float16, float32 (default: float16)
+  --device <cpu|cuda>            Transcription device (default: cuda; explicit cpu defaults to int8)
+  --compute-type <type>          Precision: int8, float16, float32 (CUDA default: float16)
   --no-simplify                  Skip Traditional→Simplified Chinese conversion
   --ffmpeg-path <path>           Path to ffmpeg executable
   --transcribe-timeout <secs>    Timeout per transcription in seconds (default: 600)
+
+  Default CUDA runtime failures retry with small + cpu + int8 unless device/precision was explicit.
 
 Rerun with the same output directory to resume from download-state.json.
 `);
@@ -60,9 +62,12 @@ export function parseArgs(argv) {
     // Transcription
     transcribe: true,
     model: "medium",
+    modelExplicit: false,
     language: "zh",
     device: "cuda",
+    deviceExplicit: false,
     computeType: "float16",
+    computeTypeExplicit: false,
     simplify: true,
     ffmpegPath: null,
     transcribeTimeoutMs: 600_000,
@@ -93,16 +98,28 @@ export function parseArgs(argv) {
     }
     else if (arg === "--headed") options.headed = true;
     else if (arg === "--no-transcribe") options.transcribe = false;
-    else if (arg === "--model") options.model = next();
+    else if (arg === "--model") {
+      options.model = next();
+      options.modelExplicit = true;
+    }
     else if (arg === "--language") options.language = next();
-    else if (arg === "--device") options.device = next();
-    else if (arg === "--compute-type") options.computeType = next();
+    else if (arg === "--device") {
+      options.device = next();
+      options.deviceExplicit = true;
+    }
+    else if (arg === "--compute-type") {
+      options.computeType = next();
+      options.computeTypeExplicit = true;
+    }
     else if (arg === "--no-simplify") options.simplify = false;
     else if (arg === "--ffmpeg-path") options.ffmpegPath = path.resolve(next());
     else if (arg === "--transcribe-timeout") options.transcribeTimeoutMs = parsePositiveInt(next(), arg) * 1_000;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg.startsWith("--")) throw new Error(`Unknown option: ${arg}`);
     else options.texts.push(arg);
+  }
+  if (options.device === "cpu" && !options.computeTypeExplicit) {
+    options.computeType = "int8";
   }
   return options;
 }

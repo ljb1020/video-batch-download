@@ -33,7 +33,7 @@
 - **Multi-platform video download** — supports public videos from currently integrated platforms.
 - **Browser-based extraction** — captures media URLs via Playwright, without yt-dlp or third-party parsing APIs.
 - **Local transcription** — uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) to generate transcripts without cloud APIs; optional Traditional→Simplified conversion via [OpenCC](https://github.com/BYVoid/OpenCC).
-- **Structured output** — saves metadata, transcript text, and JSON output locally.
+- **Structured output** — saves raw machine transcription in JSON and one user-facing TXT transcript locally. When used as an Agent Skill, the Agent conservatively reviews that TXT in place.
 - **Highest quality available without login** — enumerates streams actually accessible without an account session, selects the best candidate, and records why it was selected or downgraded.
 - **Separated stream support** — downloads and merges separated video/audio streams with ffmpeg for Bilibili and Douyin when needed.
 - **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Kuaishou/Xiaohongshu/Weibo reliability.
@@ -74,13 +74,7 @@ Additional practical limits:
 - Python 3.10+
 - [ffmpeg](https://ffmpeg.org/) (must be on `PATH`)
 
-The default transcription profile is `medium + cuda + float16 + zh`, which works best on machines with a usable NVIDIA CUDA environment.
-
-If CUDA is unavailable or default transcription startup fails, run with:
-
-```bash
---device cpu --compute-type int8 --model small
-```
+The default transcription profile starts with `medium + cuda + float16 + zh`. If that default device/compute profile hits a recognized CUDA runtime error, transcription automatically falls back to `small + cpu + int8`. An explicitly selected `--model` is preserved, while explicit `--device` or `--compute-type` choices are never overridden. Explicit `--device cpu` uses `int8` unless `--compute-type` is also provided. Output records the actual configuration and fallback reason.
 
 ## Installation
 
@@ -192,7 +186,7 @@ node scripts/download.mjs --clear-temp --output ./video_results
 node scripts/download.mjs "url" --device cuda --compute-type float16 --model large-v3
 ```
 
-### CPU fallback
+### Use CPU transcription
 
 ```bash
 node scripts/download.mjs "url" --device cpu --compute-type int8 --model small
@@ -233,6 +227,23 @@ video_results/
 By default, the final MP4 is copied into the per-video folder as a user-facing artifact. The `.temp` directory is a reusable media cache for resume/retry workflows. If you pass `--no-video-output`, the MP4 remains only in `.temp`; clear it later with `--clear-temp` when you want to free disk space.
 
 Rerun with the same output directory to resume from `download-state.json`.
+
+Folder and file timestamps use the machine's local time in `YYYY_MM_DD_HH-mm-ss` format, not UTC.
+
+The JSON `transcript` and `segments` are the original faster-whisper record. When run as an Agent Skill, the Agent reviews the complete existing `*_transcript.txt` and only fixes obvious, context-confirmable typos, homophones, terminology, punctuation, and sentence boundaries. It does not polish, expand, summarize, alter uncertain text, or modify JSON. The TXT is edited in place and remains the only user-facing transcript; raw/corrected/polished variants are not created.
+
+### Processing states and Agent review
+
+| State | Meaning |
+| --- | --- |
+| `completed` | Requested machine processing finished: transcription succeeded, or `--no-transcribe` explicitly skipped it. |
+| `transcription_failed` | Video and metadata succeeded, but transcription and any eligible CPU fallback failed; video and JSON are preserved. |
+| `failed` | Parsing, download, or output generation failed and may be retried. |
+| `permanent_failure` | The content is unavailable, invalid, or otherwise not retryable. |
+
+These are `download-state.json` program states; a successful per-item output JSON retains `status: "success"`. If transcription was requested, the overall Agent Skill task is complete only after every generated TXT has been reviewed. A transcription failure skips TXT review, increments `transcriptionFailed` in the batch summary, returns exit code `1`, and must be reported as incomplete.
+
+If transcription succeeds but detects no speech, the item remains `completed` and produces no TXT; reruns reuse that result without attempting transcription forever.
 
 ### JSON format
 
@@ -278,8 +289,10 @@ Rerun with the same output directory to resume from `download-state.json`.
 		"language": "zh",
 		"language_probability": 0.98,
 		"device": "cuda",
-		"compute_type": "float16"
+		"compute_type": "float16",
+		"fallback_reason": null
 	},
+	"transcription_error": null,
 	"quality": {
 		"access_mode": "anonymous",
 		"selection_version": "anonymous-best-v1",
@@ -345,8 +358,8 @@ Rerun with the same output directory to resume from `download-state.json`.
 | `--no-transcribe`             | off       | Skip Whisper transcription                    |
 | `--model <name>`              | `medium`  | Whisper model (`small`, `medium`, `large-v3`) |
 | `--language <code>`           | `zh`      | Language code, `auto` = auto-detect           |
-| `--device <cpu\|cuda>`        | `cuda`    | Transcription device                          |
-| `--compute-type <type>`       | `float16` | Precision (`int8`, `float16`, `float32`)      |
+| `--device <cpu\|cuda>`        | `cuda`    | Transcription device; explicit `cpu` defaults compute type to `int8` |
+| `--compute-type <type>`       | `float16` | Precision (`int8`, `float16`, `float32`); an explicit value disables automatic fallback |
 | `--no-simplify`               | off       | Skip Traditional→Simplified conversion        |
 | `--ffmpeg-path <path>`        | auto      | Path to ffmpeg executable                     |
 | `--transcribe-timeout <secs>` | `600`     | Timeout per transcription                     |

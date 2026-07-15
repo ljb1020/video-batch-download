@@ -36,7 +36,7 @@ pip install -U faster-whisper opencc
 
 Also requires `ffmpeg` on PATH.
 
-Default transcription uses `medium + cuda + float16 + zh`, which works best on machines with a usable NVIDIA CUDA environment. If CUDA is unavailable or default transcription startup fails, run with `--device cpu --compute-type int8 --model small`.
+Default transcription starts with `medium + cuda + float16 + zh`. If the default device/compute profile hits a recognized CUDA runtime error, the pipeline automatically falls back to `small + cpu + int8`; if the user explicitly selected a model, that model is preserved. Explicit `--device` or `--compute-type` choices are never overridden. Explicit `--device cpu` uses `int8` unless `--compute-type` is also provided. The result records the actual model, device, compute type, and fallback reason.
 
 ## Workflow
 
@@ -47,10 +47,17 @@ Default transcription uses `medium + cuda + float16 + zh`, which works best on m
     - Parse video metadata via Playwright browser interception, page state, and runtime media fallbacks; enumerate candidates available without login, rank them by quality, then validate the normalized result (concurrency 1 by default for stability)
     - Download MP4 via CDN URL into `<output>/.temp` cache (concurrency 1 by default for stability). For Bilibili and Douyin separated media streams, downloads video and audio separately and merges with ffmpeg.
     - Validate the final MP4 tracks and expected resolution/frame-rate/HDR; if the top candidate fails, try the next quality candidate available without login
-    - Extract audio with ffmpeg → transcribe with local faster-whisper (model reused, conservative CUDA default)
+    - Extract audio with ffmpeg → transcribe with local faster-whisper (model reused; recognized CUDA startup or runtime failures automatically fall back to CPU when device/precision were not explicitly selected)
     - Convert Traditional Chinese to Simplified via OpenCC
     - Write MP4 (by default), structured JSON, and plain text transcript into each video result folder
-4. **Report results** — Real-time progress on stderr + final JSON summary on stdout.
+4. **Review every generated transcript TXT — required**:
+    - After successful transcription, read the complete existing `*_transcript.txt`; review long transcripts sequentially in chunks.
+    - Directly edit that single TXT only when the title, description, terminology, and surrounding context make an error clear. Correct obvious typos, homophones, terms, punctuation, and sentence boundaries.
+    - Do not rewrite, summarize, expand, polish, or change the speaker's meaning or style. Preserve uncertain text.
+    - Do not modify `transcript` or `segments` in JSON: JSON is the raw machine-transcription record, while TXT is the user-facing reviewed transcript.
+    - Do not create raw/corrected/polished TXT variants. The existing transcript TXT is the only transcript file.
+    - If transcription is skipped with `--no-transcribe`, no review is required. If transcription fails, skip review and report the task as incomplete.
+5. **Report results** — Real-time progress on stderr + final JSON summary on stdout. Do not report the Skill task complete until every generated TXT has been reviewed. Report whether each TXT was reviewed and whether corrections were made; report transcription or review failures as incomplete.
 
 ## Usage
 
@@ -160,8 +167,8 @@ node scripts/download.mjs --input links.txt --disable-platform weibo,kuaishou
 | `--no-transcribe` | off | Skip Whisper transcription |
 | `--model <name>` | `medium` | Whisper model (`small`, `medium`, `large-v3`) |
 | `--language <code>` | `zh` | Language code, `auto` = auto-detect |
-| `--device <cpu\|cuda>` | `cuda` | Transcription device |
-| `--compute-type <type>` | `float16` | Precision (`int8`, `float16`, `float32`) |
+| `--device <cpu\|cuda>` | `cuda` | Transcription device; explicit `cpu` defaults compute type to `int8` |
+| `--compute-type <type>` | `float16` | Precision (`int8`, `float16`, `float32`); an explicit value disables automatic fallback |
 | `--no-simplify` | off | Skip Traditional→Simplified conversion |
 | `--ffmpeg-path <path>` | auto | Path to ffmpeg executable |
 | `--transcribe-timeout <secs>` | `600` | Timeout per transcription |
@@ -184,6 +191,21 @@ video_results/
 ```
 
 By default, the final MP4 is copied into the per-video folder. The `.temp` directory is a reusable cache for resume/retry workflows. With `--no-video-output`, MP4 files stay only in `.temp` and are not copied into result folders.
+
+Folder and file timestamps use the machine's local time in `YYYY_MM_DD_HH-mm-ss` format, not UTC.
+
+The JSON `transcript` and `segments` preserve the raw faster-whisper output. When this repository is used as an Agent Skill, the existing `*_transcript.txt` is conservatively reviewed in place and is the single user-facing transcript; no alternate transcript files are created.
+
+### Processing status vs. Skill completion
+
+- `completed`: the program finished the requested machine processing (transcription succeeded, or transcription was explicitly skipped with `--no-transcribe`).
+- `transcription_failed`: video and metadata succeeded, but both the requested transcription attempt and any eligible CPU fallback failed. The video and JSON are preserved, the batch summary increments `transcriptionFailed`, and the command exits with code `1`.
+- `failed`: parsing, downloading, or output generation failed and may be retried.
+- `permanent_failure`: the content is unavailable, invalid, or otherwise not retryable.
+
+These are `download-state.json` program states; a successful per-item output JSON retains `status: "success"`. When transcription is requested, the Agent must still review every generated TXT before the overall Skill task is complete. `transcription_failed` has no TXT review step and must be reported as incomplete.
+
+A successful transcription that detects no speech remains `completed` and produces no TXT, so no Agent review is required for that item.
 
 ### JSON format
 
@@ -226,8 +248,10 @@ By default, the final MP4 is copied into the per-video folder. The `.temp` direc
     "language": "zh",
     "language_probability": 0.98,
     "device": "cuda",
-    "compute_type": "float16"
+    "compute_type": "float16",
+    "fallback_reason": null
   },
+  "transcription_error": null,
   "quality": {
     "access_mode": "anonymous",
     "selection_version": "anonymous-best-v1",

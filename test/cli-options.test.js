@@ -15,10 +15,38 @@ test("parseArgs preserves download and transcription defaults", () => {
   assert.equal(options.maxAttempts, 10);
   assert.equal(options.transcribe, true);
   assert.equal(options.model, "medium");
+  assert.equal(options.modelExplicit, false);
   assert.equal(options.device, "cuda");
+  assert.equal(options.deviceExplicit, false);
+  assert.equal(options.computeTypeExplicit, false);
   assert.equal(options.videoOutput, true);
   assert.deepEqual(options.disabledPlatforms, []);
   assert.deepEqual(options.texts, []);
+});
+
+test("parseArgs tracks explicitly selected transcription settings", () => {
+  const options = parseArgs([
+    "--model", "large-v3",
+    "--device", "cuda",
+    "--compute-type", "float32",
+  ]);
+
+  assert.equal(options.model, "large-v3");
+  assert.equal(options.modelExplicit, true);
+  assert.equal(options.device, "cuda");
+  assert.equal(options.deviceExplicit, true);
+  assert.equal(options.computeType, "float32");
+  assert.equal(options.computeTypeExplicit, true);
+});
+
+test("an explicitly selected CPU device defaults to int8 unless precision is explicit", () => {
+  const cpuDefault = parseArgs(["--device", "cpu"]);
+  assert.equal(cpuDefault.computeType, "int8");
+  assert.equal(cpuDefault.computeTypeExplicit, false);
+
+  const cpuExplicit = parseArgs(["--device", "cpu", "--compute-type", "float32"]);
+  assert.equal(cpuExplicit.computeType, "float32");
+  assert.equal(cpuExplicit.computeTypeExplicit, true);
 });
 
 test("parseArgs converts durations, repeatable platform values, and positional text", () => {

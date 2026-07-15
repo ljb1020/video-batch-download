@@ -16,6 +16,14 @@ Short share links can expire, redirect to a feed page, or point to a different i
 
 Run the same command with the same output directory. `download-state.json` records completed items, and verified MP4 cache files in `<output>/.temp` are reused. Deleting `.temp` does not remove already generated JSON/TXT or item-folder MP4 files, but it prevents cache-based resume/retry for missing video artifacts.
 
+## CUDA transcription fails
+
+With the default device and compute profile, recognized CUDA startup or runtime errors automatically retry transcription with `small + cpu + int8`. An explicitly selected `--model` is preserved, while explicit `--device` or `--compute-type` choices are not overridden. Explicit `--device cpu` uses `int8` unless a compute type is also supplied.
+
+If the CPU retry also fails, the item is saved as `transcription_failed`: its video and raw metadata JSON remain available, `transcription_error` records the failure, the batch summary increments `transcriptionFailed`, and the command exits with code `1`. Rerun with the same output directory to reuse the cached video and retry only transcription. Missing Python or faster-whisper, model download failures, and unrelated dependency errors do not trigger CUDA fallback.
+
+If transcription succeeds but detects no speech, the item is `completed` without a TXT file and is reused on later runs.
+
 ## A download URL expires
 
 No manual action is required. A failed media transfer causes the item to return to browser parsing and obtain a fresh CDN URL.

@@ -15,7 +15,15 @@ export function sleep(ms) {
 }
 
 export async function settleWithin(promise, timeoutMs) {
-  await Promise.race([promise.catch(() => {}), sleep(timeoutMs)]);
+  let timer = null;
+  try {
+    await Promise.race([
+      promise.catch(() => {}),
+      new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 export function retryDelay(attempt) {

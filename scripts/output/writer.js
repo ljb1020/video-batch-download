@@ -15,6 +15,15 @@ function safePathSegment(value, fallback = "video", maxLen = 80) {
   return (cleaned || fallback).slice(0, maxLen);
 }
 
+export function formatLocalTimestamp(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("_") + `_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}`;
+}
+
 export function sanitizeStreamForOutput(stream) {
   if (!stream || typeof stream !== "object") return null;
   const output = {};
@@ -47,8 +56,7 @@ export function buildQualityOutput(parsed) {
 }
 
 function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}) {
-  const now = new Date();
-  const timeStr = now.toISOString().replace("T", "_").replace(/[:.]/g, "-").slice(0, 19);
+  const timeStr = formatLocalTimestamp();
   const authorName = safeFilename(parsed.author?.nickname ?? "", 20);
   const rawVideoId = parsed.videoId ?? itemKey(parsed.sourceUrl);
   const fileVideoId = safePathSegment(rawVideoId, itemKey(parsed.sourceUrl), 50);
@@ -60,12 +68,12 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
 
   const segments = transcribeResult?.segments ?? [];
   const transcript = transcribeResult?.transcript ?? "";
-  const transcription = transcribeResult?.meta ?? null;
+  const transcription = transcribeResult?.meta ?? options.transcriptionRuntime ?? null;
   const jsonPath = path.join(itemDir, `${base}.json`);
   const txtPath = transcript ? path.join(itemDir, `${base}_transcript.txt`) : null;
 
   const result = {
-    status: "success",
+    status: options.processingStatus ?? "success",
     source_url: parsed.sourceUrl,
     canonical_url: parsed.canonicalUrl,
     video_id: rawVideoId,
@@ -79,8 +87,9 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
     stats: parsed.statistics,
     transcript: transcript || null,
     segments,
-    transcript_source: transcription ? "faster-whisper" : null,
+    transcript_source: transcribeResult?.meta ? "faster-whisper" : null,
     transcription,
+    transcription_error: options.transcriptionError ?? null,
     quality: buildQualityOutput(parsed),
     media_info: null,
     output_file: jsonPath,
@@ -159,8 +168,7 @@ export async function writeOutputsWithMediaInfo(parsed, transcribeResult, mp4Inf
 export const writeCompletedResult = writeOutputsWithMediaInfo;
 
 export function writeFailedOutput(sourceUrl, errorMessage, errorType, outputDir, platform) {
-  const now = new Date();
-  const timeStr = now.toISOString().replace("T", "_").replace(/[:.]/g, "-").slice(0, 19);
+  const timeStr = formatLocalTimestamp();
   const safePlatform = safeFilename(platform || "未知", 20);
   const safeErrorType = safeFilename(errorType, 20);
   const base = `${timeStr}_failed_${safePlatform}_${safeErrorType}`;

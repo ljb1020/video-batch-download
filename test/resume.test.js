@@ -43,6 +43,20 @@ test("JSON and transcript reuse requires completed files on disk", async (t) => 
   assert.deepEqual(pending.map((item) => item.id), ["pending"]);
 });
 
+test("a completed no-speech transcription reuses its JSON without requiring TXT", async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "video-resume-no-speech-"));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const jsonPath = path.join(dir, "result.json");
+  await fsp.writeFile(jsonPath, "{}", "utf8");
+
+  assert.equal(await hasReusableTranscriptOutput({
+    status: "completed",
+    jsonPath,
+    hasTranscript: false,
+    transcriptionCompleted: true,
+  }), true);
+});
+
 test("temporary cache helpers resolve and clear the cache directory", async (t) => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "video-temp-cache-"));
   t.after(() => fsp.rm(dir, { recursive: true, force: true }));

@@ -33,7 +33,7 @@
 - **多平台视频下载**：支持已接入平台的公开视频链接。
 - **浏览器拦截提取**：通过 Playwright 捕获媒体地址，不依赖 yt-dlp 或第三方解析 API。
 - **本地语音转写**：通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 在本地生成文案，不依赖云 API；可选 [OpenCC](https://github.com/BYVoid/OpenCC) 繁→简转换。
-- **结构化输出**：保存视频元数据、TXT 文案和 JSON 结果。
+- **结构化输出**：JSON 保存机器原始转写，TXT 作为唯一的用户文案；作为 Agent Skill 使用时，Agent 会对 TXT 做保守审阅并直接修正。
 - **无登录态的最高画质**：枚举无登录态实际可访问的候选流，按画质选择最高档，并记录选择依据与降级原因。
 - **分离流支持**：B站和抖音遇到视频/音频分离媒体流时，会自动下载并通过 ffmpeg 合并。
 - **运行时兜底**：结合平台 API、页面状态和浏览器实际观察到的媒体响应，提高 B站/抖音/快手/小红书/微博稳定性。
@@ -74,13 +74,7 @@
 - Python 3.10+
 - [ffmpeg](https://ffmpeg.org/)（需要在 `PATH` 中）
 
-默认转写配置为 `medium + cuda + float16 + zh`，更适合具备可用 NVIDIA CUDA 环境的电脑。
-
-如果你的电脑不支持 CUDA，或默认转写启动失败，建议显式改用：
-
-```bash
---device cpu --compute-type int8 --model small
-```
+默认转写先尝试 `medium + cuda + float16 + zh`。仅当默认设备/计算精度配置遇到明确的 CUDA 运行时错误，才会自动降级到 `small + cpu + int8`；用户显式指定过 `--model` 时会保留该模型，显式指定的 `--device` 或 `--compute-type` 则绝不会被自动覆盖。只显式传入 `--device cpu` 时，计算精度自动使用 `int8`；若同时指定 `--compute-type`，则保持用户值。输出会记录实际配置和降级原因。
 
 ## 安装
 
@@ -234,6 +228,23 @@ video_results/
 
 使用同一输出目录重跑时，会复用 `download-state.json` 做断点续传。
 
+目录和文件名中的时间使用运行机器的本地时间，格式为 `YYYY_MM_DD_HH-mm-ss`，不再使用 UTC。
+
+JSON 的 `transcript` 和 `segments` 始终保留 faster-whisper 的机器原始结果。作为 Agent Skill 使用时，Agent 会完整阅读现有的 `*_transcript.txt`，只修正能结合标题、描述、术语和上下文明确判断的错别字、同音字、术语、标点和断句；不润色、不扩写、不总结、不改变原意或说话风格，不确定的内容保持原样。Agent 只原地修改这一份 TXT，不修改 JSON，也不生成 raw/corrected/polished 等多版本文案。
+
+### 程序状态与 Agent 审阅
+
+| 状态 | 含义 |
+| --- | --- |
+| `completed` | 程序已完成要求的机器处理：转写成功，或用户明确传入 `--no-transcribe`。 |
+| `transcription_failed` | 视频和元数据成功，但转写及适用的 CPU 自动降级最终仍失败；视频和 JSON 继续保留。 |
+| `failed` | 解析、下载或输出失败，可按错误情况重试。 |
+| `permanent_failure` | 内容无效、不可用或属于其他不可重试错误。 |
+
+这些是 `download-state.json` 中的程序状态；单条成功产物 JSON 仍使用 `status: "success"`。请求转写时，只有 Agent 审阅完所有已生成 TXT，整个 Skill 任务才算完成；转写失败时跳过 TXT 审阅，批次摘要的 `transcriptionFailed` 会增加，命令退出码为 `1`，并必须将任务报告为未完成。
+
+如果转写正常完成但检测不到语音，该条目仍为 `completed` 且不生成 TXT；后续重跑会复用这一结果，不会无限重复转写。
+
 ### JSON 格式
 
 <details>
@@ -278,8 +289,10 @@ video_results/
 		"language": "zh",
 		"language_probability": 0.98,
 		"device": "cuda",
-		"compute_type": "float16"
+		"compute_type": "float16",
+		"fallback_reason": null
 	},
+	"transcription_error": null,
 	"quality": {
 		"access_mode": "anonymous",
 		"selection_version": "anonymous-best-v1",
@@ -345,8 +358,8 @@ video_results/
 | `--no-transcribe`             | 关闭      | 跳过 Whisper 转写                             |
 | `--model <name>`              | `medium`  | Whisper 模型（`small`, `medium`, `large-v3`） |
 | `--language <code>`           | `zh`      | 语言代码，`auto` = 自动检测                   |
-| `--device <cpu\|cuda>`        | `cuda`    | 转写设备                                      |
-| `--compute-type <type>`       | `float16` | 精度（`int8`, `float16`, `float32`）          |
+| `--device <cpu\|cuda>`        | `cuda`    | 转写设备；显式使用 `cpu` 时计算精度默认改为 `int8` |
+| `--compute-type <type>`       | `float16` | 精度（`int8`, `float16`, `float32`）；显式指定后不触发自动降级 |
 | `--no-simplify`               | 关闭      | 跳过繁→简转换                                 |
 | `--ffmpeg-path <path>`        | 自动      | ffmpeg 可执行文件路径                         |
 | `--transcribe-timeout <secs>` | `600`     | 单次转写超时                                  |

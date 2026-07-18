@@ -68,3 +68,18 @@ test("temporary cache helpers resolve and clear the cache directory", async (t) 
   assert.equal(await clearTempCache(dir), tempDir);
   assert.equal(await fileExists(tempDir), false);
 });
+
+test("clearing media cache preserves resumable Agent review work", async (t) => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "video-temp-review-"));
+  t.after(() => fsp.rm(dir, { recursive: true, force: true }));
+  const tempDir = getTempDir(dir);
+  const reviewDir = path.join(tempDir, "agent-review", "run-1", "claim-1");
+  await fsp.mkdir(reviewDir, { recursive: true });
+  await fsp.writeFile(path.join(tempDir, "cached.mp4"), "cache", "utf8");
+  await fsp.writeFile(path.join(reviewDir, "work.txt"), "checkpoint", "utf8");
+
+  await clearTempCache(dir);
+
+  assert.equal(await fileExists(path.join(tempDir, "cached.mp4")), false);
+  assert.equal(await fileExists(path.join(reviewDir, "work.txt")), true);
+});

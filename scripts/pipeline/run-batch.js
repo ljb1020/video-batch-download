@@ -1,4 +1,5 @@
 import fsp from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import process from "node:process";
 
 import { parseArgs, readInputText, usage } from "../cli/options.js";
@@ -9,16 +10,38 @@ import { terminateActiveMediaProcesses } from "../media/ffmpeg.js";
 import { extractAndRouteUrls, getPlatformId, loadPlatforms } from "../platforms/router.js";
 import { TranscriptionClient } from "../transcription/client.js";
 import { writeBatchSummary } from "../output/writer.js";
+import { buildInitialAgentReviewSummary } from "../review/coordinator.js";
 import { BrowserManager } from "../utils/browser-manager.js";
 import { Semaphore } from "../utils/semaphore.js";
 import { StateStore } from "../utils/state-store.js";
 import { runDownloadPhase } from "./download-phase.js";
 import { finalizeWithoutTranscription, runTranscriptionPhase } from "./transcribe-phase.js";
 
-export async function buildSummary({ urlsWithParsers, options, store, accessMode, platforms, platformWarnings }) {
+export async function buildSummary({
+  urlsWithParsers,
+  options,
+  store,
+  accessMode,
+  platforms,
+  platformWarnings,
+  runId = randomUUID(),
+}) {
   const urls = urlsWithParsers.map(({ url }) => url);
   const finalResults = await Promise.all(urls.map(async (url) => {
     const state = store.get(url);
+    let agentReview = null;
+    let transcriptFile = null;
+    if (state?.jsonPath) {
+      try {
+        const item = JSON.parse(await fsp.readFile(state.jsonPath, "utf8"));
+        agentReview = item.agent_review ?? null;
+        transcriptFile = item.transcript_file ?? null;
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          console.warn(`[summary] failed to read agent review state from ${state.jsonPath}: ${error.message}`);
+        }
+      }
+    }
     return {
       url,
       status: state?.status ?? "unknown",
@@ -31,11 +54,20 @@ export async function buildSummary({ urlsWithParsers, options, store, accessMode
       bytes: state?.bytes,
       hasTranscript: state?.hasTranscript ?? false,
       transcription: state?.transcription ?? null,
+      transcriptFile,
+      agentReview,
       lastError: state?.lastError,
     };
   }));
+  const reviewAggregate = buildInitialAgentReviewSummary(finalResults.map((result) => ({
+    agentReview: result.agentReview,
+    status: result.status,
+    transcript_file: result.transcriptFile,
+  })));
+  const publicResults = finalResults.map(({ agentReview: _agentReview, ...result }) => result);
 
   return {
+    runId,
     total: urls.length,
     completed: finalResults.filter((result) => result.status === "completed").length,
     withTranscript: finalResults.filter((result) => result.hasTranscript).length,
@@ -58,9 +90,10 @@ export async function buildSummary({ urlsWithParsers, options, store, accessMode
             .filter(Boolean),
         }
       : null,
+    agentReview: reviewAggregate,
     platforms: platforms.map((ParserClass) => getPlatformId(ParserClass)),
     platformWarnings,
-    results: finalResults,
+    results: publicResults,
   };
 }
 
@@ -74,6 +107,7 @@ export async function runBatch(options) {
   }
 
   const inputText = await readInputText(options);
+  const runId = randomUUID();
   const platformWarnings = [];
   const platforms = await loadPlatforms({
     disabledPlatforms: options.disabledPlatforms,
@@ -162,6 +196,7 @@ export async function runBatch(options) {
       accessMode,
       platforms,
       platformWarnings,
+      runId,
     });
     await writeBatchSummary(options.output, summary);
 

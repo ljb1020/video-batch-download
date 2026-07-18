@@ -3,6 +3,11 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 
 import { QUALITY_SELECTION_VERSION } from "../core/policies.js";
+import {
+  createInitialAgentReview,
+  formatTranscriptTxtContent,
+} from "../review/coordinator.js";
+import { withFileLock, writeJsonAtomic } from "../review/atomic-files.js";
 import { getVideoInfo, isValidMp4, itemKey, safeFilename } from "../utils/common.js";
 
 function safePathSegment(value, fallback = "video", maxLen = 80) {
@@ -71,6 +76,14 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
   const transcription = transcribeResult?.meta ?? options.transcriptionRuntime ?? null;
   const jsonPath = path.join(itemDir, `${base}.json`);
   const txtPath = transcript ? path.join(itemDir, `${base}_transcript.txt`) : null;
+  const txtContent = formatTranscriptTxtContent(transcript);
+  const reviewRequirement = transcript
+    ? { required: true, reason: null }
+    : options.processingStatus === "transcription_failed"
+      ? { required: true, reason: "transcription_failed" }
+      : options.transcribe === false
+        ? { required: false, reason: "transcription_disabled" }
+        : { required: false, reason: "no_speech" };
 
   const result = {
     status: options.processingStatus ?? "success",
@@ -94,12 +107,17 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
     media_info: null,
     output_file: jsonPath,
     transcript_file: txtPath,
+    agent_review: createInitialAgentReview({
+      transcript,
+      txtContent,
+      ...reviewRequirement,
+    }),
     video_file: null,
     video_output: Boolean(options.videoOutput),
     cache_video_file: mp4Info?.filePath ?? null,
   };
 
-  if (transcript && txtPath) fs.writeFileSync(txtPath, `${transcript}\n`, "utf8");
+  if (txtContent && txtPath) fs.writeFileSync(txtPath, txtContent, "utf8");
   fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), "utf8");
   return { result, itemDir, jsonPath, base };
 }
@@ -191,7 +209,7 @@ export function writeFailedOutput(sourceUrl, errorMessage, errorType, outputDir,
 export async function writeBatchSummary(outputDir, summary, stdout = process.stdout) {
   const summaryFile = path.join(outputDir, "download-summary.json");
   const serialized = `${JSON.stringify(summary, null, 2)}\n`;
-  await fsp.writeFile(summaryFile, serialized, "utf8");
+  await withFileLock(summaryFile, () => writeJsonAtomic(summaryFile, summary));
   stdout.write(serialized);
   return summaryFile;
 }

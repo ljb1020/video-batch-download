@@ -16,7 +16,7 @@ Download options:
   --media-wait <seconds>         Wait for media after navigation (default: 25)
   --download-timeout <seconds>   Total time allowed per transfer (default: 900)
   --no-video-output              Do not copy MP4 into item folders; keep it in .temp cache
-  --clear-temp                   Delete the output .temp cache and exit
+  --clear-temp                   Delete media cache but preserve Agent review checkpoints
   --headed                       Show the browser for verification fallback
   --storage-state <file>         Optional Playwright storage-state JSON
   --disable-platform <id>        Disable a discovered platform plugin; repeatable

@@ -74,6 +74,18 @@ export function getTempDir(outputDir) {
 
 export async function clearTempCache(outputDir) {
   const tempDir = getTempDir(outputDir);
-  await fsp.rm(tempDir, { recursive: true, force: true });
+  let entries;
+  try {
+    entries = await fsp.readdir(tempDir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === "ENOENT") return tempDir;
+    throw error;
+  }
+  await Promise.all(entries
+    .filter((entry) => entry.name !== "agent-review")
+    .map((entry) => fsp.rm(path.join(tempDir, entry.name), { recursive: true, force: true })));
+  await fsp.rmdir(tempDir).catch((error) => {
+    if (!new Set(["ENOENT", "ENOTEMPTY", "EEXIST"]).has(error.code)) throw error;
+  });
   return tempDir;
 }

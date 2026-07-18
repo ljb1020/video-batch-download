@@ -33,7 +33,7 @@
 - **多平台视频下载**：支持已接入平台的公开视频链接。
 - **浏览器拦截提取**：通过 Playwright 捕获媒体地址，不依赖 yt-dlp 或第三方解析 API。
 - **本地语音转写**：通过 [faster-whisper](https://github.com/SYSTRAN/faster-whisper) 在本地生成文案，不依赖云 API；可选 [OpenCC](https://github.com/BYVoid/OpenCC) 繁→简转换。
-- **结构化输出**：JSON 保存机器原始转写，TXT 作为唯一的用户文案；作为 Agent Skill 使用时，Agent 会对 TXT 做保守审阅并直接修正。
+- **结构化输出与可续审纠正**：JSON 保存机器原始转写，TXT 作为唯一用户文案；全部机器转写结束后，Agent 可领取临时工作副本、分块 checkpoint，并在校验通过后发布纠正后的 TXT，原始 JSON 转录保持不变。
 - **无登录态的最高画质**：枚举无登录态实际可访问的候选流，按画质选择最高档，并记录选择依据与降级原因。
 - **分离流支持**：B站和抖音遇到视频/音频分离媒体流时，会自动下载并通过 ffmpeg 合并。
 - **运行时兜底**：结合平台 API、页面状态和浏览器实际观察到的媒体响应，提高 B站/抖音/快手/小红书/微博稳定性。
@@ -45,11 +45,13 @@
 
 ## 适用范围与限制
 
-本工具面向公开视频内容和本地处理流程。它会下载公开视频、提取元数据，并可选地在本地进行语音转写。
+本工具面向公开视频内容。视频下载、媒体处理、faster-whisper 转写和 OpenCC 转换均由本机程序执行，程序不会调用外部模型 API。
+
+可选的 TXT 纠正由当前宿主中的主 Agent 或子 Agent 执行，不是 Node/Python 程序内部的模型调用。因此，转录文本的数据处理位置、留存与隐私规则取决于当前 Agent 宿主。若要求严格本地、不同意 Agent 读取 TXT，应禁用 Agent 审阅，只使用机器原始 TXT/JSON。
 
 它不会：
 
-- 上传视频或转写结果到外部服务
+- 内置视频/转录上传或第三方解析、转写、纠正 API 调用（可选 Agent 审阅遵循上面的宿主边界）
 - 处理私密内容或强登录内容
 - 绕过平台访问控制
 - 对画面文字做 OCR
@@ -224,13 +226,32 @@ video_results/
   └── download-summary.json
 ```
 
-默认情况下，最终 MP4 会复制到每个视频目录，作为用户可见的正式产物。`.temp` 是可复用媒体缓存，用于断点续传、失败重试和后续补处理。如果传入 `--no-video-output`，MP4 只保留在 `.temp`，不会进入视频结果目录；不需要缓存时可用 `--clear-temp` 清理。
+默认情况下，最终 MP4 会复制到每个视频目录，作为用户可见的正式产物。`.temp` 同时保存可复用媒体缓存和可续审的 Agent 工作副本。如果传入 `--no-video-output`，MP4 只保留在 `.temp`；`--clear-temp` 只清媒体缓存，保留 `.temp/agent-review` checkpoint。
 
 使用同一输出目录重跑时，会复用 `download-state.json` 做断点续传。
 
 目录和文件名中的时间使用运行机器的本地时间，格式为 `YYYY_MM_DD_HH-mm-ss`，不再使用 UTC。
 
-JSON 的 `transcript` 和 `segments` 始终保留 faster-whisper 的机器原始结果。作为 Agent Skill 使用时，Agent 会完整阅读现有的 `*_transcript.txt`，只修正能结合标题、描述、术语和上下文明确判断的错别字、同音字、术语、标点和断句；不润色、不扩写、不总结、不改变原意或说话风格，不确定的内容保持原样。Agent 只原地修改这一份 TXT，不修改 JSON，也不生成 raw/corrected/polished 等多版本文案。
+JSON 的 `transcript` 和 `segments` 始终保留 faster-whisper 的机器原始结果，Agent 审阅不得修改。审阅者只编辑 claim 返回的临时工作副本，只修正能结合标题、描述、术语和上下文明确判断的识别错误、同音字、术语、标点和断句；不润色、不扩写、不总结、不改变原意或说话风格，不确定内容保持原样。校验完成后才覆盖唯一的用户可见 `*_transcript.txt`，不生成 raw/corrected/polished 等多版本文案。
+
+### 全批次机器处理后的 Agent 审阅
+
+只有当前批次的全部机器处理结束后才开始 Agent 审阅。当前批次严格由 `download-summary.json.results[].jsonPath` 定义；复用输出目录时，不扫描或混入历史 JSON/TXT。
+
+```bash
+node scripts/agent-review.mjs reconcile --summary ./video_results/download-summary.json
+node scripts/agent-review.mjs plan --summary ./video_results/download-summary.json --max-concurrency 3
+# 创建审阅 Agent 后，回写请求/实际并发数，并重复 plan 使用的预算参数：
+node scripts/agent-review.mjs reconcile --summary ./video_results/download-summary.json --max-concurrency 3 --effective-concurrency 2
+# 审阅者对分配项使用 claim/checkpoint/pause/complete 或 fail。
+node scripts/agent-review.mjs finalize --summary ./video_results/download-summary.json
+```
+
+默认请求最多 3 个子 Agent，用户可以设置其他值；实际并发受宿主槽位和共享工作区能力限制。每个 Agent 按分桶顺序处理多个 TXT，不是一条 TXT 开一个 Agent。程序只负责批次范围、哈希、token 估算、claim、checkpoint 和提交等确定性协调，不会调用审阅模型。
+
+没有子 Agent 能力时，主 Agent 按受限上下文预算分轮串行审阅：每块完成后 checkpoint，在上下文耗尽前 `pause`，随后在新的干净 Agent 会话中指向同一 summary 续审。若宿主既不能创建子 Agent，也无法提供新的干净会话，必须报告“机器阶段完成、审阅可恢复但未完成”，不能冒充全部完成。
+
+严格本地或用户明确禁用审阅时，运行 `reconcile --summary ./video_results/download-summary.json --disable-review`。它会把尚未 reviewed 的项目记录为 `required=false`、`reason=agent_review_disabled_by_user`；最终必须明确报告纠正功能已禁用。
 
 ### 程序状态与 Agent 审阅
 
@@ -241,7 +262,9 @@ JSON 的 `transcript` 和 `segments` 始终保留 faster-whisper 的机器原始
 | `failed` | 解析、下载或输出失败，可按错误情况重试。 |
 | `permanent_failure` | 内容无效、不可用或属于其他不可重试错误。 |
 
-这些是 `download-state.json` 中的程序状态；单条成功产物 JSON 仍使用 `status: "success"`。请求转写时，只有 Agent 审阅完所有已生成 TXT，整个 Skill 任务才算完成；转写失败时跳过 TXT 审阅，批次摘要的 `transcriptionFailed` 会增加，命令退出码为 `1`，并必须将任务报告为未完成。
+这些是 `download-state.json` 中的机器状态；单条成功产物 JSON 仍使用 `status: "success"`。下载 CLI 的退出码只表达机器阶段：`0` 表示机器阶段成功，`1` 表示存在机器失败，`2` 表示参数或输入错误。Agent 审阅仍为 `pending` 不会改变下载 CLI 退出码。
+
+审阅阶段有独立完成语义：`agent-review finalize` 返回 `0` 表示所有必需审阅完成或无需审阅，`1` 表示存在 failed/blocked/stale，`2` 表示参数、schema 或状态损坏，`3` 表示 pending/paused/有效 in-progress 等可恢复待续状态。只有机器阶段满足用户请求且审阅 finalize 返回 `0`，整个 Skill 任务才算完成。
 
 如果转写正常完成但检测不到语音，该条目仍为 `completed` 且不生成 TXT；后续重跑会复用这一结果，不会无限重复转写。
 
@@ -293,6 +316,27 @@ JSON 的 `transcript` 和 `segments` 始终保留 faster-whisper 的机器原始
 		"fallback_reason": null
 	},
 	"transcription_error": null,
+	"agent_review": {
+		"schema_version": 2,
+		"required": true,
+		"status": "pending",
+		"reason": null,
+		"source_transcript_sha256": "<sha256>",
+		"source_txt_sha256": "<sha256>",
+		"reviewed_txt_sha256": null,
+		"estimated_transcript_tokens": 6820,
+		"generation": 0,
+		"review_started_at": null,
+		"subagent_failure_count": 0,
+		"active_claim": null,
+		"checkpoint": null,
+		"attempt_history": [],
+		"reviewed_at": null,
+		"duration_ms": null,
+		"changed_lines_count": null,
+		"reported_corrections_count": null,
+		"error": null
+	},
 	"quality": {
 		"access_mode": "anonymous",
 		"selection_version": "anonymous-best-v1",
@@ -343,7 +387,7 @@ JSON 的 `transcript` 和 `segments` 始终保留 faster-whisper 的机器原始
 | `--media-wait <secs>`        | `25`              | 等待媒体响应时间                   |
 | `--download-timeout <secs>`  | `900`             | 单个文件下载超时                   |
 | `--no-video-output`          | 关闭              | MP4 只保留在 `.temp` 缓存，不复制到每个视频目录 |
-| `--clear-temp`               | 关闭              | 删除 `<output>/.temp` 缓存并退出   |
+| `--clear-temp`               | 关闭              | 删除媒体缓存、保留 Agent 审阅 checkpoint 并退出 |
 | `--headed`                   | 关闭              | 显示浏览器窗口                     |
 | `--storage-state <file>`     | —                 | Playwright storage-state JSON      |
 | `--disable-platform <id>`    | —                 | 禁用插件 ID；可重复传入或用逗号分隔 |

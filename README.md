@@ -33,7 +33,7 @@
 - **Multi-platform video download** — supports public videos from currently integrated platforms.
 - **Browser-based extraction** — captures media URLs via Playwright, without yt-dlp or third-party parsing APIs.
 - **Local transcription** — uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) to generate transcripts without cloud APIs; optional Traditional→Simplified conversion via [OpenCC](https://github.com/BYVoid/OpenCC).
-- **Structured output** — saves raw machine transcription in JSON and one user-facing TXT transcript locally. When used as an Agent Skill, the Agent conservatively reviews that TXT in place.
+- **Structured output with resumable Agent review** — saves raw machine transcription in JSON and one user-facing TXT. After the entire machine batch finishes, an Agent host can review claimed temporary copies with checkpoints and publish the corrected TXT without changing the raw JSON transcript.
 - **Highest quality available without login** — enumerates streams actually accessible without an account session, selects the best candidate, and records why it was selected or downgraded.
 - **Separated stream support** — downloads and merges separated video/audio streams with ffmpeg for Bilibili and Douyin when needed.
 - **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Kuaishou/Xiaohongshu/Weibo reliability.
@@ -45,11 +45,13 @@
 
 ## Scope and Limitations
 
-This tool is designed for public video content and local processing. It downloads public videos, extracts metadata, and optionally transcribes speech locally.
+This tool is designed for public video content. Downloading, media processing, faster-whisper transcription, and OpenCC conversion run on the local machine; the program does not call an external model API.
+
+Optional TXT correction is performed by the current main Agent or its sub-Agents, not by the Node/Python program. Transcript data is therefore subject to the execution location, retention, and privacy rules of that Agent host. If strict local-only handling is required, disable Agent review and use the raw machine TXT/JSON.
 
 It does not:
 
-- upload media or transcripts to external services
+- include built-in media/transcript uploads or third-party parsing, transcription, or correction API calls (optional Agent review follows the host boundary described above)
 - process private or login-required content
 - bypass platform access controls
 - perform OCR on visual text
@@ -224,13 +226,32 @@ video_results/
   └── download-summary.json
 ```
 
-By default, the final MP4 is copied into the per-video folder as a user-facing artifact. The `.temp` directory is a reusable media cache for resume/retry workflows. If you pass `--no-video-output`, the MP4 remains only in `.temp`; clear it later with `--clear-temp` when you want to free disk space.
+By default, the final MP4 is copied into the per-video folder as a user-facing artifact. The `.temp` directory holds reusable media cache plus resumable Agent-review work. If you pass `--no-video-output`, the MP4 remains only in `.temp`; `--clear-temp` removes media cache but preserves `.temp/agent-review` checkpoints.
 
 Rerun with the same output directory to resume from `download-state.json`.
 
 Folder and file timestamps use the machine's local time in `YYYY_MM_DD_HH-mm-ss` format, not UTC.
 
-The JSON `transcript` and `segments` are the original faster-whisper record. When run as an Agent Skill, the Agent reviews the complete existing `*_transcript.txt` and only fixes obvious, context-confirmable typos, homophones, terminology, punctuation, and sentence boundaries. It does not polish, expand, summarize, alter uncertain text, or modify JSON. The TXT is edited in place and remains the only user-facing transcript; raw/corrected/polished variants are not created.
+The JSON `transcript` and `segments` are the original faster-whisper record and remain unchanged by review. The Agent edits a claimed temporary work copy, fixes only context-confirmable recognition errors, terminology, punctuation, and sentence boundaries, and publishes it over the single user-facing `*_transcript.txt` after validation. It does not polish, expand, summarize, guess uncertain text, or create raw/corrected/polished variants.
+
+### Agent review after the machine batch
+
+Agent review starts only after every item in the machine batch has finished. The current batch is defined exclusively by `download-summary.json.results[].jsonPath`; review tooling does not sweep old JSON/TXT files from a reused output directory.
+
+```bash
+node scripts/agent-review.mjs reconcile --summary ./video_results/download-summary.json
+node scripts/agent-review.mjs plan --summary ./video_results/download-summary.json --max-concurrency 3
+# After spawning reviewers, persist requested/actual concurrency and repeat any plan budget flags:
+node scripts/agent-review.mjs reconcile --summary ./video_results/download-summary.json --max-concurrency 3 --effective-concurrency 2
+# Reviewers use claim/checkpoint/pause/complete or fail for each assigned item.
+node scripts/agent-review.mjs finalize --summary ./video_results/download-summary.json
+```
+
+The default requested maximum is 3 sub-Agents and users may choose another value. Actual concurrency depends on the Agent host and shared-workspace access. Each Agent processes multiple TXT files sequentially according to the generated buckets; the workflow does not create one Agent per TXT. The program only coordinates deterministic state, hashes, claims, checkpoints, and commits—it never invokes the reviewing model.
+
+Without sub-Agent support, the main Agent reviews in bounded rounds, checkpoints every block, calls `pause` before its context budget is exhausted, and continues in a clean Agent session using the same summary. If no clean continuation context is available, the correct result is “machine phase complete, review resumable but incomplete,” not a false success.
+
+For strict local-only handling or user opt-out, run `reconcile --summary ./video_results/download-summary.json --disable-review`. It marks unfinished review as not required with reason `agent_review_disabled_by_user`; report that correction was explicitly disabled.
 
 ### Processing states and Agent review
 
@@ -241,7 +262,9 @@ The JSON `transcript` and `segments` are the original faster-whisper record. Whe
 | `failed` | Parsing, download, or output generation failed and may be retried. |
 | `permanent_failure` | The content is unavailable, invalid, or otherwise not retryable. |
 
-These are `download-state.json` program states; a successful per-item output JSON retains `status: "success"`. If transcription was requested, the overall Agent Skill task is complete only after every generated TXT has been reviewed. A transcription failure skips TXT review, increments `transcriptionFailed` in the batch summary, returns exit code `1`, and must be reported as incomplete.
+These are `download-state.json` machine states; a successful per-item output JSON retains `status: "success"`. The download CLI returns `0` for a successful machine phase, `1` for machine failures, and `2` for input/argument errors. Pending Agent review does not change the download CLI exit code.
+
+Review has separate completion semantics: `agent-review finalize` returns `0` when all required reviews are complete (or none are required), `1` for failed/blocked/stale items, `2` for argument/schema/state errors, and `3` while pending/paused/valid in-progress work can be resumed. The overall Skill task is complete only when the requested machine phase succeeds and review finalization returns `0`.
 
 If transcription succeeds but detects no speech, the item remains `completed` and produces no TXT; reruns reuse that result without attempting transcription forever.
 
@@ -293,6 +316,27 @@ If transcription succeeds but detects no speech, the item remains `completed` an
 		"fallback_reason": null
 	},
 	"transcription_error": null,
+	"agent_review": {
+		"schema_version": 2,
+		"required": true,
+		"status": "pending",
+		"reason": null,
+		"source_transcript_sha256": "<sha256>",
+		"source_txt_sha256": "<sha256>",
+		"reviewed_txt_sha256": null,
+		"estimated_transcript_tokens": 6820,
+		"generation": 0,
+		"review_started_at": null,
+		"subagent_failure_count": 0,
+		"active_claim": null,
+		"checkpoint": null,
+		"attempt_history": [],
+		"reviewed_at": null,
+		"duration_ms": null,
+		"changed_lines_count": null,
+		"reported_corrections_count": null,
+		"error": null
+	},
 	"quality": {
 		"access_mode": "anonymous",
 		"selection_version": "anonymous-best-v1",
@@ -343,7 +387,7 @@ If transcription succeeds but detects no speech, the item remains `completed` an
 | `--media-wait <secs>`        | `25`              | Wait for media response after navigation                     |
 | `--download-timeout <secs>`  | `900`             | Total download timeout per file                              |
 | `--no-video-output`          | off               | Keep MP4 only in `.temp` cache instead of copying it into each item folder |
-| `--clear-temp`               | off               | Delete `<output>/.temp` cache and exit                       |
+| `--clear-temp`               | off               | Delete media cache, preserve Agent-review checkpoints, and exit |
 | `--headed`                   | off               | Show browser window                                          |
 | `--storage-state <file>`     | —                 | Playwright storage-state JSON                                |
 | `--disable-platform <id>`    | —                 | Disable plugin ID(s); repeat or use comma-separated IDs      |

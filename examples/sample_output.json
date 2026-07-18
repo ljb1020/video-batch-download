@@ -70,6 +70,27 @@
     "fallback_reason": null
   },
   "transcription_error": null,
+  "agent_review": {
+    "schema_version": 2,
+    "required": true,
+    "status": "pending",
+    "reason": null,
+    "source_transcript_sha256": "88c567a8f8abdf0335ac03cd39e54b341e61ae71186948b4a0e23e6cc6f43da0",
+    "source_txt_sha256": "b78ad45f96856931602299a007eaf8ca7eb37b77c5bf2a9588ec856cb21f4e2c",
+    "reviewed_txt_sha256": null,
+    "estimated_transcript_tokens": 178,
+    "generation": 0,
+    "review_started_at": null,
+    "subagent_failure_count": 0,
+    "active_claim": null,
+    "checkpoint": null,
+    "attempt_history": [],
+    "reviewed_at": null,
+    "duration_ms": null,
+    "changed_lines_count": null,
+    "reported_corrections_count": null,
+    "error": null
+  },
   "quality": {
     "access_mode": "anonymous",
     "selection_version": "anonymous-best-v1",

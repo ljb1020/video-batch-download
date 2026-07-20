@@ -11,7 +11,7 @@ Download options:
   --output <dir>                 Output directory (default: ./video_results)
   --parse-concurrency <n>        Concurrent browser parsers (default: 1)
   --download-concurrency <n>     Concurrent media downloads (default: 1)
-  --max-attempts <n>             Attempts per item; 0 retries forever (default: 10)
+  --max-attempts <n>             Attempts per retryable item; 0 retries forever (default: 3)
   --page-timeout <seconds>       Page navigation timeout (default: 45)
   --media-wait <seconds>         Wait for media after navigation (default: 25)
   --download-timeout <seconds>   Total time allowed per transfer (default: 900)
@@ -51,7 +51,7 @@ export function parseArgs(argv) {
     output: path.resolve("video_results"),
     parseConcurrency: 1,
     downloadConcurrency: 1,
-    maxAttempts: 10,
+    maxAttempts: 3,
     pageTimeoutMs: 45_000,
     mediaWaitMs: 25_000,
     downloadTimeoutMs: 900_000,

@@ -61,6 +61,38 @@ test("batch summary counts transcription failures separately and records runtime
   assert.equal(summary.agentReview.status, "completed");
 });
 
+test("batch summary treats undefined transcribe as enabled (same as download/phase gating)", async () => {
+  const summary = await buildSummary({
+    urlsWithParsers: [{ url: "ok" }],
+    options: {
+      output: "out",
+      videoOutput: false,
+      transcribe: undefined,
+      model: "medium",
+      device: "cpu",
+      computeType: "int8",
+    },
+    store: {
+      file: "state.json",
+      get: () => ({
+        status: "completed",
+        hasTranscript: true,
+        transcription: { model: "medium", device: "cpu", compute_type: "int8" },
+      }),
+    },
+    accessMode: "anonymous",
+    platforms: [],
+    platformWarnings: [],
+  });
+
+  assert.ok(summary.transcribe);
+  assert.deepEqual(summary.transcribe.requested, {
+    model: "medium",
+    device: "cpu",
+    compute_type: "int8",
+  });
+});
+
 test("batch summary aggregates review state only from current result JSON paths", async (t) => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "video-summary-review-"));
   t.after(() => rm(dir, { recursive: true, force: true }));

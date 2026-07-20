@@ -1,3 +1,5 @@
+import { ProcessingError } from "../core/errors.js";
+
 /**
  * Base class for platform-specific video parsers.
  *
@@ -89,13 +91,58 @@ export class PlatformParser {
 /**
  * A platform-scoped failure with stable retry semantics for the core pipeline.
  */
-export class PlatformError extends Error {
-  constructor(message, { code = "PLATFORM_ERROR", permanent = false, cause } = {}) {
-    super(message, cause ? { cause } : undefined);
+export class PlatformError extends ProcessingError {
+  constructor(message, {
+    code = "PLATFORM_ERROR",
+    category = "platform",
+    stage = "parse",
+    permanent = false,
+    retryable,
+    retryScope = "item",
+    userMessage = null,
+    suggestion = null,
+    details = null,
+    cause,
+  } = {}) {
+    super(message, {
+      code,
+      category,
+      stage,
+      permanent,
+      retryable,
+      retryScope,
+      userMessage,
+      suggestion,
+      details,
+      cause,
+    });
     this.name = "PlatformError";
-    this.code = code;
-    this.permanent = permanent;
   }
+}
+
+/**
+ * Merge platform errors without demoting a permanent failure to a retryable one.
+ * When both are permanent, prefer unsupported/content over generic API errors.
+ */
+export function preferPlatformError(current, next) {
+  if (!next) return current;
+  if (!current) return next;
+  if (current.permanent && !next.permanent) return current;
+  if (!current.permanent && next.permanent) return next;
+
+  if (current.permanent && next.permanent) {
+    const rank = (error) => {
+      if (error.code === "UNSUPPORTED_CONTENT_TYPE") return 3;
+      if (error.category === "content") return 2;
+      return 1;
+    };
+    const currentRank = rank(current);
+    const nextRank = rank(next);
+    if (nextRank > currentRank) return next;
+    if (nextRank < currentRank) return current;
+  }
+
+  return next;
 }
 
 /**

@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 
+import { serializeErrorInfo } from "../core/errors.js";
 import { QUALITY_SELECTION_VERSION } from "../core/policies.js";
 import {
   createInitialAgentReview,
@@ -84,6 +86,9 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
       : options.transcribe === false
         ? { required: false, reason: "transcription_disabled" }
         : { required: false, reason: "no_speech" };
+  const transcriptionErrorInfo = options.transcriptionErrorInfo
+    ? serializeErrorInfo(options.transcriptionErrorInfo)
+    : null;
 
   const result = {
     status: options.processingStatus ?? "success",
@@ -103,6 +108,16 @@ function writeOutputs(parsed, transcribeResult, mp4Info, outputDir, options = {}
     transcript_source: transcribeResult?.meta ? "faster-whisper" : null,
     transcription,
     transcription_error: options.transcriptionError ?? null,
+    error_code: transcriptionErrorInfo?.code ?? null,
+    error_category: transcriptionErrorInfo?.category ?? null,
+    error_stage: transcriptionErrorInfo?.stage ?? null,
+    retryable: transcriptionErrorInfo?.retryable ?? null,
+    permanent: transcriptionErrorInfo?.permanent ?? null,
+    user_message: transcriptionErrorInfo?.userMessage ?? null,
+    technical_error: transcriptionErrorInfo?.userMessage && transcriptionErrorInfo.userMessage !== transcriptionErrorInfo.message
+      ? transcriptionErrorInfo.message
+      : null,
+    suggestion: transcriptionErrorInfo?.suggestion ?? null,
     quality: buildQualityOutput(parsed),
     media_info: null,
     output_file: jsonPath,
@@ -185,11 +200,12 @@ export async function writeOutputsWithMediaInfo(parsed, transcribeResult, mp4Inf
 
 export const writeCompletedResult = writeOutputsWithMediaInfo;
 
-export function writeFailedOutput(sourceUrl, errorMessage, errorType, outputDir, platform) {
+export function writeFailedOutput(sourceUrl, errorMessage, errorType, outputDir, platform, metadata = {}) {
   const timeStr = formatLocalTimestamp();
   const safePlatform = safeFilename(platform || "未知", 20);
   const safeErrorType = safeFilename(errorType, 20);
-  const base = `${timeStr}_failed_${safePlatform}_${safeErrorType}`;
+  const unique = randomUUID().replaceAll("-", "").slice(0, 12);
+  const base = `${timeStr}_failed_${safePlatform}_${safeErrorType}_${unique}`;
   const itemDir = path.join(outputDir, base);
   fs.mkdirSync(itemDir, { recursive: true });
 
@@ -197,9 +213,12 @@ export function writeFailedOutput(sourceUrl, errorMessage, errorType, outputDir,
     status: "failed",
     source_url: sourceUrl,
     error: errorMessage,
-    error_type: errorType,
+    error_type: metadata.error_type ?? errorType,
   };
   if (platform) result.platform = platform;
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value !== undefined && value !== null && key !== "error_type") result[key] = value;
+  }
 
   const jsonPath = path.join(itemDir, `${base}.json`);
   fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), "utf8");

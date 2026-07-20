@@ -171,7 +171,7 @@ node scripts/download.mjs --input links.txt --disable-platform weibo,kuaishou
 | `--output <dir>` | `./video_results` | Output directory |
 | `--parse-concurrency <n>` | `1` | Concurrent browser parsers |
 | `--download-concurrency <n>` | `1` | Concurrent media downloads (serial by default for stability) |
-| `--max-attempts <n>` | `10` | Retry attempts per item (0 = infinite) |
+| `--max-attempts <n>` | `3` | Attempts per retryable item; permanent failures are not retried (0 = infinite) |
 | `--page-timeout <secs>` | `45` | Page navigation timeout |
 | `--media-wait <secs>` | `25` | Wait for media response after navigation |
 | `--download-timeout <secs>` | `900` | Total download timeout per file |
@@ -222,9 +222,9 @@ The JSON `transcript` and `segments` preserve the raw faster-whisper output. Age
 - `completed`: the program finished the requested machine processing (transcription succeeded, or transcription was explicitly skipped with `--no-transcribe`).
 - `transcription_failed`: video and metadata succeeded, but both the requested transcription attempt and any eligible CPU fallback failed. The video and JSON are preserved, the batch summary increments `transcriptionFailed`, and the command exits with code `1`.
 - `failed`: parsing, downloading, or output generation failed and may be retried.
-- `permanent_failure`: the content is unavailable, invalid, or otherwise not retryable.
+- `permanent_failure`: the content is unavailable, invalid, or otherwise not retryable (deleted, private, unsupported image/text notes, etc.).
 
-These are `download-state.json` machine states; a successful per-item output JSON retains `status: "success"`. The download CLI exits `0` for a successful machine phase, `1` for machine failures, and `2` for input/argument errors. Pending Agent review does not change those exit codes.
+These are `download-state.json` machine states; a successful per-item output JSON retains `status: "success"`. Failure JSON and `transcription_failed` items also carry structured fields such as `error_code`, `error_category`, `error_stage`, `retryable`, `permanent`, `user_message`, and optional `technical_error` / `suggestion`. `transcription_error` is the technical message; user-facing Chinese copy lives in `user_message`. The download CLI exits `0` for a successful machine phase, `1` for machine failures, and `2` for input/argument errors. Pending Agent review does not change those exit codes.
 
 Review completion is separate: `agent-review finalize` exits `0` when all required reviews are complete or none are required, `1` for failed/blocked/stale work, `2` for invalid arguments/schema/state, and `3` for resumable pending/paused/in-progress work. `transcription_failed` has no TXT to edit but blocks overall Skill completion.
 
@@ -275,6 +275,14 @@ A successful transcription that detects no speech remains `completed` and produc
     "fallback_reason": null
   },
   "transcription_error": null,
+  "error_code": null,
+  "error_category": null,
+  "error_stage": null,
+  "retryable": null,
+  "permanent": null,
+  "user_message": null,
+  "technical_error": null,
+  "suggestion": null,
   "agent_review": {
     "schema_version": 2,
     "required": true,

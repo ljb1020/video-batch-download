@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   PlatformError,
+  preferPlatformError,
   validateParsedVideo,
 } from "../scripts/platforms/base.js";
 
@@ -121,4 +122,34 @@ test("validateParsedVideo rejects invalid normalized results with a permanent pl
       },
     );
   }
+});
+
+test("preferPlatformError never demotes permanent failures", () => {
+  const permanentDeleted = new PlatformError("deleted", {
+    code: "CONTENT_DELETED",
+    category: "content",
+    permanent: true,
+  });
+  const permanentUnsupported = new PlatformError("image note", {
+    code: "UNSUPPORTED_CONTENT_TYPE",
+    category: "content",
+    permanent: true,
+  });
+  const retryableApi = new PlatformError("status 5", {
+    code: "PLATFORM_API_ERROR",
+    category: "platform",
+    retryable: true,
+  });
+
+  assert.equal(preferPlatformError(permanentDeleted, retryableApi), permanentDeleted);
+  assert.equal(preferPlatformError(retryableApi, permanentDeleted), permanentDeleted);
+  assert.equal(preferPlatformError(permanentDeleted, permanentUnsupported), permanentUnsupported);
+  assert.equal(preferPlatformError(null, retryableApi), retryableApi);
+  assert.equal(preferPlatformError(permanentDeleted, null), permanentDeleted);
+  assert.equal(preferPlatformError(retryableApi, retryableApi), retryableApi);
+
+  // Body/content permanent must upgrade over earlier retryable API noise (not ??=).
+  const upgraded = preferPlatformError(retryableApi, permanentDeleted);
+  assert.equal(upgraded.code, "CONTENT_DELETED");
+  assert.equal(upgraded.permanent, true);
 });

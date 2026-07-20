@@ -1,4 +1,4 @@
-import { PlatformParser } from "./base.js";
+import { PlatformError, PlatformParser, preferPlatformError } from "./base.js";
 import { sleep, settleWithin } from "../utils/common.js";
 
 const URL_PATTERNS = [
@@ -25,9 +25,13 @@ export class WeiboParser extends PlatformParser {
   async parse(browserManager, url, options) {
     const targetOid = this._extractOid(url);
     if (!targetOid) {
-      const error = new Error("Invalid Weibo video URL: missing fid/oid");
-      error.permanent = true;
-      throw error;
+      throw new PlatformError("Invalid Weibo video URL: missing fid/oid", {
+        code: "INVALID_URL",
+        category: "content",
+        permanent: true,
+        retryable: false,
+        userMessage: "微博视频链接无效（缺少 fid/oid），已跳过。",
+      });
     }
 
     const browser = await browserManager.start();
@@ -39,7 +43,7 @@ export class WeiboParser extends PlatformParser {
     let playInfo = null;
     let componentStatus = null;
     let componentError = null;
-    let permanentReason = null;
+    let permanentError = null;
 
     const addCandidate = (candidate) => {
       const normalizedUrl = this._normalizeUrl(candidate?.url);
@@ -68,7 +72,17 @@ export class WeiboParser extends PlatformParser {
           const json = await response.json();
           if (String(json?.code) !== "100000") {
             componentError = json?.msg || `Weibo component API code ${json?.code ?? "unknown"}`;
-            if (PERMANENT_ERROR_PATTERN.test(componentError)) permanentReason = componentError;
+            if (PERMANENT_ERROR_PATTERN.test(componentError)) {
+              permanentError = preferPlatformError(permanentError, new PlatformError(componentError, {
+                code: /暂无权限|无权查看|仅自己可见/u.test(componentError)
+                  ? "CONTENT_PRIVATE"
+                  : "CONTENT_DELETED",
+                category: "content",
+                permanent: true,
+                retryable: false,
+                userMessage: `微博视频${componentError}，已跳过。`,
+              }));
+            }
             return;
           }
 
@@ -120,26 +134,68 @@ export class WeiboParser extends PlatformParser {
       const pageTitle = await page.title().catch(() => "");
 
       if (finalOid && finalOid !== targetOid) {
-        const error = new Error(`Weibo redirected to a different video (${finalOid})`);
-        error.permanent = true;
-        throw error;
+        throw new PlatformError(`Weibo redirected to a different video (${finalOid})`, {
+          code: "CONTENT_UNAVAILABLE",
+          category: "content",
+          permanent: true,
+          retryable: false,
+          userMessage: "微博跳转到了其他视频，已跳过。",
+        });
       }
 
       const pagePermanentReason = bodyText.match(PERMANENT_ERROR_PATTERN)?.[0] ?? null;
-      if (pagePermanentReason) permanentReason = pagePermanentReason;
+      if (pagePermanentReason) {
+        permanentError = preferPlatformError(permanentError, new PlatformError(pagePermanentReason, {
+          code: /暂无权限|无权查看|仅自己可见/u.test(pagePermanentReason)
+            ? "CONTENT_PRIVATE"
+            : "CONTENT_DELETED",
+          category: "content",
+          permanent: true,
+          retryable: false,
+          userMessage: `微博视频${pagePermanentReason}，已跳过。`,
+        }));
+      }
 
       for (const candidate of await this._collectRuntimeMediaCandidates(page, targetOid)) {
         addCandidate(candidate);
       }
 
+      if (permanentError?.permanent) {
+        throw permanentError;
+      }
+
       if (candidates.length === 0) {
+        if (permanentError) throw permanentError;
         const challenge = /验证码|安全验证|访问频次|账号登录|请先登录|passport\.weibo/i.test(bodyText + finalUrl);
-        const reason = permanentReason
-          ?? (challenge ? "Weibo verification/login challenge" : componentError)
-          ?? `No Weibo media found (component status ${componentStatus ?? "unknown"})`;
-        const error = new Error(reason);
-        error.permanent = Boolean(permanentReason);
-        throw error;
+        if (challenge) {
+          throw new PlatformError("Weibo verification/login challenge", {
+            code: "VERIFICATION_REQUIRED",
+            category: "access",
+            retryable: true,
+            retryScope: "item",
+            userMessage: "微博触发验证码/登录限制，稍后会按重试策略再试。",
+            suggestion: "如果反复出现，可使用 --headed 手动验证，或提供 --storage-state 登录态。",
+          });
+        }
+        if (componentError) {
+          throw new PlatformError(componentError, {
+            code: "PLATFORM_API_ERROR",
+            category: "platform",
+            retryable: true,
+            retryScope: "item",
+            userMessage: "微博接口返回异常，稍后会重新解析。",
+          });
+        }
+        throw new PlatformError(
+          `No Weibo media found (component status ${componentStatus ?? "unknown"})`,
+          {
+            code: "MEDIA_DISCOVERY_FAILED",
+            category: "platform",
+            retryable: true,
+            retryScope: "item",
+            userMessage: "没有捕获到微博视频媒体地址，稍后会重新解析。",
+          }
+        );
       }
 
       candidates.sort((a, b) => this._candidateScore(b) - this._candidateScore(a));

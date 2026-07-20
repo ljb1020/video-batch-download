@@ -1,10 +1,18 @@
 import path from "node:path";
 
+import {
+  ProcessingError,
+  buildErrorStatePatch,
+  buildFailureOutputMetadata,
+  clearErrorStatePatch,
+  normalizeError,
+  operationInterruptedError,
+} from "../core/errors.js";
+import { QUALITY_SELECTION_VERSION } from "../core/policies.js";
 import { downloadMedia } from "../media/downloader.js";
-import { ensureFfmpegAvailable } from "../media/ffmpeg.js";
+import { ensureFfmpegAvailable, getMediaTracks } from "../media/ffmpeg.js";
 import { validateParsedVideo } from "../platforms/base.js";
 import { getPlatformId } from "../platforms/router.js";
-import { QUALITY_SELECTION_VERSION } from "../core/policies.js";
 import {
   getReusableVideoPath,
   hasReusableCacheVideo,
@@ -18,6 +26,23 @@ import {
   writeFailedOutput,
 } from "../output/writer.js";
 import { retryDelay, sleep } from "../utils/common.js";
+
+function failureTypeFor(error, fallback = "unexpected") {
+  if (error.permanent) return "permanent";
+  if (!error.retryable) return "non_retryable";
+  return fallback;
+}
+
+function writeFailureReport(writeFailedOutputImpl, url, error, errorType, options, ParserClass, attempt) {
+  return writeFailedOutputImpl(
+    url,
+    error.userMessage || error.message,
+    errorType,
+    options.output,
+    ParserClass.getPlatformName(),
+    buildFailureOutputMetadata(error, { attempts: attempt, errorType }),
+  );
+}
 
 async function restoreMissingVideoOutput(previous, options, store, url) {
   const jsonPath = previous.jsonPath;
@@ -51,7 +76,15 @@ export async function processDownloadItem({
   downloadSemaphore,
   accessMode,
   isStopping,
+  deps = {},
 }) {
+  const {
+    downloadMedia: downloadMediaImpl = downloadMedia,
+    ensureFfmpegAvailable: ensureFfmpegAvailableImpl = ensureFfmpegAvailable,
+    retryDelay: retryDelayImpl = retryDelay,
+    sleep: sleepImpl = sleep,
+    writeFailedOutput: writeFailedOutputImpl = writeFailedOutput,
+  } = deps;
   const { url, ParserClass } = item;
   const label = `[${index + 1}/${total}]`;
   const stored = store.get(url);
@@ -63,8 +96,11 @@ export async function processDownloadItem({
     console.error(`${label} cached result uses a different access mode or quality selector; reparsing for best available quality`);
   }
 
+  // Keep download/resume audio gating aligned: default (undefined) still requires audio.
+  const requireAudio = options.transcribe !== false;
+
   if (await hasReusableJsonOutput(previous)) {
-    const transcriptOk = !options.transcribe || await hasReusableTranscriptOutput(previous);
+    const transcriptOk = !requireAudio || await hasReusableTranscriptOutput(previous);
     let videoOk = !options.videoOutput || await hasReusableVideoOutput(previous);
 
     if (!videoOk && options.videoOutput && await hasReusableCacheVideo(previous)) {
@@ -86,20 +122,38 @@ export async function processDownloadItem({
 
   if (previous?.parsed && await hasReusableCacheVideo(previous)) {
     const cacheVideoPath = await getReusableVideoPath(previous);
-    await store.update(url, {
-      status: "downloaded",
-      filePath: cacheVideoPath,
-      cacheVideoPath,
-      lastError: null,
-    });
-    console.error(`${label} using cached video: ${cacheVideoPath}`);
-    return {
-      url,
-      status: "downloaded",
-      filePath: cacheVideoPath,
-      bytes: previous.bytes,
-      resumed: true,
-    };
+    let cacheUsable = true;
+    if (requireAudio) {
+      if (previous.mediaHasAudio === false) {
+        cacheUsable = false;
+      } else if (previous.mediaHasAudio === true) {
+        cacheUsable = true;
+      } else {
+        // null / undefined / legacy entries: resume must re-probe.
+        const tracks = await getMediaTracks(cacheVideoPath, options.ffmpegPath);
+        cacheUsable = !tracks || tracks.audio;
+        if (tracks) {
+          await store.update(url, { mediaHasAudio: Boolean(tracks.audio) });
+        }
+      }
+    }
+    if (cacheUsable) {
+      await store.update(url, {
+        status: "downloaded",
+        filePath: cacheVideoPath,
+        cacheVideoPath,
+        ...clearErrorStatePatch(),
+      });
+      console.error(`${label} using cached video: ${cacheVideoPath}`);
+      return {
+        url,
+        status: "downloaded",
+        filePath: cacheVideoPath,
+        bytes: previous.bytes,
+        resumed: true,
+      };
+    }
+    console.error(`${label} cached video has no audio track; reparsing for transcribable media`);
   }
 
   let attempt = 0;
@@ -108,14 +162,14 @@ export async function processDownloadItem({
     await store.update(url, {
       status: "parsing",
       attempt,
-      lastError: null,
+      ...clearErrorStatePatch(),
       selectionVersion: QUALITY_SELECTION_VERSION,
       accessMode,
     });
     console.error(`${label} parse attempt ${attempt}${options.maxAttempts ? `/${options.maxAttempts}` : ""}: ${url}`);
 
     try {
-      ensureFfmpegAvailable(options.ffmpegPath);
+      if (attempt === 1) ensureFfmpegAvailableImpl(options.ffmpegPath);
       const parser = new ParserClass();
       const parsed = validateParsedVideo(
         await parseSemaphore.use(() => parser.parse(browserManager, url, options)),
@@ -132,7 +186,9 @@ export async function processDownloadItem({
       });
 
       const downloaded = await downloadSemaphore.use(() =>
-        downloadMedia(parsed, options.output, options.downloadTimeoutMs, options.ffmpegPath)
+        downloadMediaImpl(parsed, options.output, options.downloadTimeoutMs, options.ffmpegPath, {
+          requireAudio,
+        })
       );
 
       await store.update(url, {
@@ -143,10 +199,12 @@ export async function processDownloadItem({
         bytes: downloaded.bytes,
         parsed,
         selectedAlternativeIndex: downloaded.alternativeIndex,
-        candidateFailures: downloaded.fallbackFailures,
         selectionVersion: QUALITY_SELECTION_VERSION,
         accessMode,
-        lastError: null,
+        // Only conclusive probes write true/false; inconclusive stays null so resume re-probes.
+        mediaHasAudio: requireAudio ? (downloaded.mediaHasAudio ?? null) : null,
+        ...clearErrorStatePatch(),
+        candidateFailures: downloaded.fallbackFailures,
       });
 
       console.error(`${label} downloaded (${downloaded.bytes} bytes)`);
@@ -157,30 +215,79 @@ export async function processDownloadItem({
         bytes: downloaded.bytes,
       };
     } catch (error) {
-      const permanent = Boolean(error.permanent);
-      const status = permanent ? "permanent_failure" : "retrying";
-      await store.update(url, { status, attempt, lastError: error.message });
-      console.warn(`${label} ${status}: ${error.message}`);
+      const stopping = isStopping();
+      const normalized = stopping
+        ? operationInterruptedError(error?.message ?? "Interrupted", {
+            details: { originalError: error?.message ?? String(error ?? "Unknown error") },
+          })
+        : normalizeError(error, { stage: "download" });
+      const exhausted = options.maxAttempts !== 0 && attempt >= options.maxAttempts;
+      const shouldRetry = normalized.retryable && !normalized.permanent && !exhausted && !stopping;
+      const status = normalized.permanent
+        ? "permanent_failure"
+        : shouldRetry ? "retrying" : "failed";
+      await store.update(url, {
+        status,
+        attempt,
+        ...buildErrorStatePatch(normalized),
+      });
+      console.warn(`${label} ${status}: ${normalized.userMessage || normalized.message}`);
 
-      if (permanent) {
-        writeFailedOutput(url, error.message, "permanent", options.output, ParserClass.getPlatformName());
-        return { url, status, attempt, error: error.message };
+      if (!shouldRetry) {
+        const errorType = failureTypeFor(normalized, stopping ? "interrupted" : exhausted ? "exhausted" : "non_retryable");
+        const jsonPath = writeFailureReport(
+          writeFailedOutputImpl,
+          url,
+          normalized,
+          errorType,
+          options,
+          ParserClass,
+          attempt,
+        );
+        await store.update(url, { status, jsonPath });
+        return { url, status, attempt, error: normalized.message, errorCode: normalized.code, jsonPath };
       }
 
-      if (options.maxAttempts !== 0 && attempt >= options.maxAttempts) break;
-      await sleep(retryDelay(attempt));
+      await sleepImpl(retryDelayImpl(attempt));
     }
   }
 
-  const lastError = store.get(url)?.lastError ?? (isStopping() ? "Interrupted" : "Attempts exhausted");
-  await store.update(url, { status: "failed", attempt, lastError });
-  writeFailedOutput(url, lastError, "exhausted", options.output, ParserClass.getPlatformName());
-  return { url, status: "failed", attempt, error: lastError };
+  const interrupted = isStopping();
+  const fallbackError = interrupted
+    ? operationInterruptedError()
+    : new ProcessingError("Attempts exhausted", {
+      code: "UNEXPECTED_ERROR",
+      category: "internal",
+      stage: "download",
+      retryable: false,
+      retryScope: "none",
+      userMessage: "尝试次数已耗尽。",
+    });
+  const errorType = interrupted ? "interrupted" : "exhausted";
+  const jsonPath = writeFailureReport(
+    writeFailedOutputImpl,
+    url,
+    fallbackError,
+    errorType,
+    options,
+    ParserClass,
+    attempt,
+  );
+  await store.update(url, { status: "failed", attempt, jsonPath, ...buildErrorStatePatch(fallbackError) });
+  return { url, status: "failed", attempt, error: fallbackError.message, errorCode: fallbackError.code, jsonPath };
 }
 
 export async function runDownloadPhase(context) {
-  const { urlsWithParsers, options } = context;
+  const { urlsWithParsers, options, store } = context;
   console.error(`\n[phase 1] downloading ${urlsWithParsers.length} video(s)...`);
+
+  // One process-level preflight; per-item ensureFfmpegAvailable is memoized as a backup.
+  try {
+    ensureFfmpegAvailable(options.ffmpegPath);
+  } catch (error) {
+    const normalized = normalizeError(error, { stage: "preflight" });
+    console.error(`[phase 1] preflight failed: ${normalized.userMessage ?? normalized.message}`);
+  }
 
   return await Promise.all(
     urlsWithParsers.map((item, index) =>
@@ -189,16 +296,35 @@ export async function runDownloadPhase(context) {
         item,
         index,
         total: urlsWithParsers.length,
-      }).catch((error) => {
-        console.error(`[${index + 1}/${urlsWithParsers.length}] unexpected error: ${error.message}`);
-        writeFailedOutput(
-          item.url,
-          error.message,
-          "unexpected",
-          options.output,
-          item.ParserClass.getPlatformName(),
+      }).catch(async (error) => {
+        const normalized = normalizeError(error, { stage: "download", category: "internal", retryable: false });
+        console.error(
+          `[${index + 1}/${urlsWithParsers.length}] unexpected error: ` +
+          `${normalized.userMessage ?? normalized.message}`,
         );
-        return { url: item.url, status: "failed", error: error.message };
+        const jsonPath = writeFailureReport(
+          writeFailedOutput,
+          item.url,
+          normalized,
+          "unexpected",
+          options,
+          item.ParserClass,
+          store?.get?.(item.url)?.attempt ?? null,
+        );
+        if (store?.update) {
+          await store.update(item.url, {
+            status: "failed",
+            jsonPath,
+            ...buildErrorStatePatch(normalized),
+          });
+        }
+        return {
+          url: item.url,
+          status: "failed",
+          error: normalized.message,
+          errorCode: normalized.code,
+          jsonPath,
+        };
       })
     ),
   );

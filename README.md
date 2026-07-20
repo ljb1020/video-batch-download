@@ -38,7 +38,7 @@
 - **Separated stream support** — downloads and merges separated video/audio streams with ffmpeg for Bilibili and Douyin when needed.
 - **Runtime fallbacks** — uses platform APIs, page state, and browser-observed media responses to improve Bilibili/Douyin/Kuaishou/Xiaohongshu/Weibo reliability.
 - **Pluggable platform adapters** — discovers adapters at runtime, validates their shared contract, and isolates a broken adapter so other platforms can keep working.
-- **Media track validation** — treats an item as completed only after the final MP4 has both video and audio tracks.
+- **Media track validation** — requires a video track in the final MP4; when transcription is enabled, a usable audio track is also required (`--no-transcribe` skips the audio requirement).
 - **Output quality validation** — verifies resolution, frame rate, codec, and HDR with ffprobe, then falls back in quality order when the best candidate fails.
 - **Resumable workflow** — reruns can skip completed downloads and existing transcripts; failed items auto-retry with exponential backoff.
 - **Agent Skill ready** — can be installed as a Claude/Codex-style assistant skill.
@@ -260,9 +260,9 @@ For strict local-only handling or user opt-out, run `reconcile --summary ./video
 | `completed` | Requested machine processing finished: transcription succeeded, or `--no-transcribe` explicitly skipped it. |
 | `transcription_failed` | Video and metadata succeeded, but transcription and any eligible CPU fallback failed; video and JSON are preserved. |
 | `failed` | Parsing, download, or output generation failed and may be retried. |
-| `permanent_failure` | The content is unavailable, invalid, or otherwise not retryable. |
+| `permanent_failure` | The content is unavailable, invalid, or otherwise not retryable (deleted, private, unsupported image/text notes, etc.). |
 
-These are `download-state.json` machine states; a successful per-item output JSON retains `status: "success"`. The download CLI returns `0` for a successful machine phase, `1` for machine failures, and `2` for input/argument errors. Pending Agent review does not change the download CLI exit code.
+These are `download-state.json` machine states; a successful per-item output JSON retains `status: "success"`. Failure JSON and `transcription_failed` items also carry structured fields such as `error_code`, `error_category`, `error_stage`, `retryable`, `permanent`, `user_message`, and optional `technical_error` / `suggestion`. `transcription_error` is always the technical message; user-facing Chinese copy lives in `user_message`. The download CLI returns `0` for a successful machine phase, `1` for machine failures, and `2` for input/argument errors. Pending Agent review does not change the download CLI exit code.
 
 Review has separate completion semantics: `agent-review finalize` returns `0` when all required reviews are complete (or none are required), `1` for failed/blocked/stale items, `2` for argument/schema/state errors, and `3` while pending/paused/valid in-progress work can be resumed. The overall Skill task is complete only when the requested machine phase succeeds and review finalization returns `0`.
 
@@ -316,6 +316,14 @@ If transcription succeeds but detects no speech, the item remains `completed` an
 		"fallback_reason": null
 	},
 	"transcription_error": null,
+	"error_code": null,
+	"error_category": null,
+	"error_stage": null,
+	"retryable": null,
+	"permanent": null,
+	"user_message": null,
+	"technical_error": null,
+	"suggestion": null,
 	"agent_review": {
 		"schema_version": 2,
 		"required": true,
@@ -382,7 +390,7 @@ If transcription succeeds but detects no speech, the item remains `completed` an
 | `--output <dir>`             | `./video_results` | Output directory                                             |
 | `--parse-concurrency <n>`    | `1`               | Concurrent browser parsers                                   |
 | `--download-concurrency <n>` | `1`               | Concurrent media downloads (serial by default for stability) |
-| `--max-attempts <n>`         | `10`              | Retry attempts per item (0 = infinite)                       |
+| `--max-attempts <n>`         | `3`               | Attempts per retryable item; permanent failures are not retried (0 = infinite) |
 | `--page-timeout <secs>`      | `45`              | Page navigation timeout                                      |
 | `--media-wait <secs>`        | `25`              | Wait for media response after navigation                     |
 | `--download-timeout <secs>`  | `900`             | Total download timeout per file                              |
@@ -425,14 +433,16 @@ Playwright opens the page and detects media URLs
     ↓
 Download video / audio streams into <output>/.temp cache
     ↓
-Merge DASH streams with ffmpeg when needed
+Merge DASH streams with ffmpeg when needed; probe tracks before accepting the file
     ↓
-Extract audio and transcribe with faster-whisper
+Unless `--no-transcribe`, require a conclusive or inconclusive-but-kept audio path for transcription
     ↓
-Save MP4, metadata JSON, and TXT transcript locally
+Extract audio and transcribe with faster-whisper (in-run retries for timeout/runtime; terminal non-retryable when exhausted)
+    ↓
+Save MP4, metadata JSON, structured error fields when needed, and TXT transcript locally
 ```
 
-Parse and download concurrency default to `1` for stability and can be raised with CLI flags. The Whisper model is loaded once per process and reused across items.
+Parse and download concurrency default to `1` for stability and can be raised with CLI flags. The Whisper model is loaded once per process and reused across items. Platform plugins raise `PlatformError` (a `ProcessingError`); permanent content failures are never demoted by later temporary API noise.
 
 ## Run Tests
 

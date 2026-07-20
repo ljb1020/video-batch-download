@@ -59,7 +59,7 @@ If the user explicitly requires strict local-only handling or declines Agent acc
 
 With the default device and compute profile, recognized CUDA startup or runtime errors automatically retry transcription with `small + cpu + int8`. An explicitly selected `--model` is preserved, while explicit `--device` or `--compute-type` choices are not overridden. Explicit `--device cpu` uses `int8` unless a compute type is also supplied.
 
-If the CPU retry also fails, the item is saved as `transcription_failed`: its video and raw metadata JSON remain available, `transcription_error` records the failure, the batch summary increments `transcriptionFailed`, and the command exits with code `1`. Rerun with the same output directory to reuse the cached video and retry only transcription. Missing Python or faster-whisper, model download failures, and unrelated dependency errors do not trigger CUDA fallback.
+If the CPU retry also fails, the item is saved as `transcription_failed`: its video and raw metadata JSON remain available, `transcription_error` records the technical failure message, and structured fields such as `error_code`, `user_message`, and `suggestion` explain the failure. The batch summary increments `transcriptionFailed`, and the command exits with code `1`. Rerun with the same output directory to reuse the cached video and retry only transcription. Missing Python or faster-whisper, model download failures, and unrelated dependency errors do not trigger CUDA fallback.
 
 If transcription succeeds but detects no speech, the item is `completed` without a TXT file and is reused on later runs.
 
@@ -69,11 +69,11 @@ No manual action is required. A failed media transfer causes the item to return 
 
 ## Downloaded file has no video or audio track
 
-The downloader validates the final MP4 before marking an item complete. `has no video track` usually means the platform exposed an audio-only candidate or a stale/partial media URL. `has no audio track` usually means a separated video stream was not paired with its audio stream. Keep the same output directory and rerun so the item can be reparsed; if it repeats for one short link, retry with the canonical URL.
+The downloader validates the final MP4 before marking an item complete. Missing video tracks (`MEDIA_VIDEO_TRACK_MISSING`) usually mean the platform exposed an audio-only candidate or a stale/partial media URL. Missing audio tracks (`MEDIA_AUDIO_TRACK_MISSING`) usually mean a separated video stream was not paired with its audio stream, or the work has no usable audio for transcription. When every candidate lacks audio, the item fails quickly as non-retryable; use `--no-transcribe` if you only need the video. Keep the same output directory and rerun so the item can be reparsed; if it repeats for one short link, retry with the canonical URL.
 
 ## Permanent failures
 
-Deleted, private, friends-only, login-only, and region-restricted works may never become downloadable. The final JSON summary distinguishes these from retryable network or verification failures.
+Deleted, private, friends-only, login-only, unsupported image/text notes, and region-restricted works may never become downloadable. They are recorded as `permanent_failure` with structured `error_code` / `user_message` fields and are not retried by `--max-attempts`. Temporary API/rate-limit noise stays retryable and must not demote an earlier permanent content failure. The final JSON summary distinguishes permanent content failures from retryable network or verification failures.
 
 ## Clearing media cache
 

@@ -57,7 +57,8 @@
 │    并行下载 → 视频 copy / 音频 AAC 合并       │
 │    清理分轨中间文件，保留合并 MP4 缓存        │
 │                                             │
-│  完成前校验最终 MP4 同时含视频轨和音频轨      │
+│  完成前探测轨道；默认转写要求音轨              │
+│  不确定探测写 mediaHasAudio=null，resume 再测 │
 └──────────────────┬──────────────────────────┘
                    ↓
       pipeline 编排 → 转写 → 输出（平台无关）
@@ -77,10 +78,11 @@ download.mjs
 ```
 
 - `cli/`：参数、帮助文本和输入文件读取。
-- `core/`：画质策略版本、临时目录和断点续传判断。
+- `core/`：画质策略版本、临时目录、断点续传判断，以及统一错误模型（`ProcessingError` / `normalizeError` / 失败落盘字段）。
 - `media/`：流下载、候选降级、ffmpeg 合并/探测/音频提取和活动进程清理。
+- `platforms/`：平台解析；失败统一为 `PlatformError`，永久内容错误通过 `preferPlatformError` 合并，禁止被临时 API 噪声降级。
 - `transcription/`：持久化 Python Whisper 服务及请求队列的生命周期。
-- `output/`：JSON/TXT、视频副本、失败结果和批次 summary 落盘。
+- `output/`：JSON/TXT、视频副本、失败结果（结构化错误字段）和批次 summary 落盘。
 - `pipeline/`：批次状态机；只编排上述能力，不包含平台私有解析规则。
 
 ### 2.3 关键设计决策

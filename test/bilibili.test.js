@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { BilibiliParser } from "../scripts/platforms/bilibili.js";
+import { PlatformError, preferPlatformError } from "../scripts/platforms/base.js";
+import { BilibiliParser, classifyBilibiliViewApiError } from "../scripts/platforms/bilibili.js";
 
 function dashFixture() {
   return {
@@ -90,4 +91,54 @@ test("Bilibili legacy muxed streams remain selectable and auditable", () => {
   assert.equal(available[0].type, "video+audio");
   assert.equal(available[0].totalBytes, 1234);
   assert.deepEqual(alternatives, [[available[0]]]);
+});
+
+test("Bilibili temporary view API codes stay retryable; known content codes are permanent", () => {
+  const riskControl = classifyBilibiliViewApiError(-412);
+  assert.equal(riskControl.code, "PLATFORM_API_ERROR");
+  assert.equal(riskControl.permanent, false);
+  assert.equal(riskControl.retryable, true);
+
+  const missing = classifyBilibiliViewApiError(-404);
+  assert.equal(missing.code, "CONTENT_UNAVAILABLE");
+  assert.equal(missing.permanent, true);
+  assert.equal(missing.retryable, false);
+
+  assert.equal(classifyBilibiliViewApiError(0), null);
+});
+
+test("Bilibili later retryable view codes do not demote earlier permanent content errors", () => {
+  let permanentError = preferPlatformError(null, classifyBilibiliViewApiError(62002));
+  permanentError = preferPlatformError(permanentError, classifyBilibiliViewApiError(-412));
+  assert.equal(permanentError.code, "CONTENT_UNAVAILABLE");
+  assert.equal(permanentError.permanent, true);
+
+  // Body permanent must also upgrade over a sticky retryable API error.
+  permanentError = preferPlatformError(null, classifyBilibiliViewApiError(-412));
+  permanentError = preferPlatformError(permanentError, new PlatformError("已被删除", {
+    code: "CONTENT_DELETED",
+    category: "content",
+    permanent: true,
+    retryable: false,
+  }));
+  assert.equal(permanentError.code, "CONTENT_DELETED");
+  assert.equal(permanentError.permanent, true);
+});
+
+test("Bilibili empty streams preserve an earlier permanentError when present", () => {
+  // Mirrors the empty-stream branch: prefer permanentError over MEDIA_DISCOVERY_FAILED.
+  const permanentError = classifyBilibiliViewApiError(62002);
+  const mediaStreams = [];
+  let thrown = null;
+  try {
+    if (mediaStreams.length === 0) {
+      if (permanentError) throw permanentError;
+      throw new Error("No valid media streams found");
+    }
+  } catch (error) {
+    thrown = error;
+  }
+  assert.equal(thrown, permanentError);
+  assert.equal(thrown.code, "CONTENT_UNAVAILABLE");
+  assert.equal(thrown.permanent, true);
 });

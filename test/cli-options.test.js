@@ -12,7 +12,7 @@ test("parseArgs preserves download and transcription defaults", () => {
   assert.equal(options.output, path.resolve("video_results"));
   assert.equal(options.parseConcurrency, 1);
   assert.equal(options.downloadConcurrency, 1);
-  assert.equal(options.maxAttempts, 10);
+  assert.equal(options.maxAttempts, 3);
   assert.equal(options.transcribe, true);
   assert.equal(options.model, "medium");
   assert.equal(options.modelExplicit, false);

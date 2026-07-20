@@ -57,6 +57,11 @@ export async function buildSummary({
       transcriptFile,
       agentReview,
       lastError: state?.lastError,
+      lastErrorCode: state?.lastErrorCode,
+      lastErrorCategory: state?.lastErrorCategory,
+      lastUserMessage: state?.lastUserMessage,
+      retryable: state?.retryable,
+      permanent: state?.permanent,
     };
   }));
   const reviewAggregate = buildInitialAgentReviewSummary(finalResults.map((result) => ({
@@ -82,7 +87,7 @@ export async function buildSummary({
     qualitySelectionVersion: QUALITY_SELECTION_VERSION,
     videosOutput: finalResults.filter((result) => result.videoOutput && result.videoFile).length,
     videosInCache: finalResults.filter((result) => result.cacheVideoFile).length,
-    transcribe: options.transcribe
+    transcribe: options.transcribe !== false
       ? {
           requested: { model: options.model, device: options.device, compute_type: options.computeType },
           actual: finalResults
@@ -156,7 +161,7 @@ export async function runBatch(options) {
     `parse concurrency ${options.parseConcurrency}, ` +
     `download concurrency ${options.downloadConcurrency}, ` +
     `video output ${options.videoOutput ? "item folders" : ".temp cache only"}, ` +
-    `transcribe ${options.transcribe ? `on (serial, ${options.model}, ${options.device})` : "off"}, ` +
+    `transcribe ${options.transcribe !== false ? `on (serial, ${options.model}, ${options.device})` : "off"}, ` +
     `output ${options.output}`,
   );
 
@@ -177,7 +182,7 @@ export async function runBatch(options) {
       console.error("[phase 1] browser closed\n");
     }
 
-    if (options.transcribe) {
+    if (options.transcribe !== false) {
       await runTranscriptionPhase({
         urlsWithParsers,
         options,

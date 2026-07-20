@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { PlatformError, preferPlatformError } from "../scripts/platforms/base.js";
 import { DouyinParser } from "../scripts/platforms/douyin.js";
 
 const parser = new DouyinParser();
@@ -105,4 +106,86 @@ test("Douyin selection supports DASH pairs and safely typed direct play URLs", (
   assert.equal(direct.type, "video+audio");
   assert.equal(unsafe, null);
   assert.deepEqual(parser._buildMediaAlternatives([video, audio])[0].map((stream) => stream.type), ["video", "audio"]);
+});
+
+test("Douyin image notes are classified as unsupported content", () => {
+  const error = parser._classifyUnsupportedDetail({
+    aweme_detail: {
+      aweme_type: 68,
+      images: [{ url_list: ["https://example.test/image.jpg"] }],
+      video: null,
+    },
+  }, "https://www.douyin.com/note/123456");
+
+  assert.equal(error.code, "UNSUPPORTED_CONTENT_TYPE");
+  assert.equal(error.category, "content");
+  assert.equal(error.permanent, true);
+  assert.equal(error.retryable, false);
+  assert.match(error.userMessage, /图文作品|不是可转写视频/u);
+});
+
+test("Douyin empty image arrays are not enough to mark a video as an image note", () => {
+  const error = parser._classifyUnsupportedDetail({
+    aweme_detail: {
+      aweme_type: 0,
+      images: [],
+      image_infos: [],
+      video: null,
+    },
+  }, "https://www.douyin.com/video/123456");
+
+  assert.equal(error, null);
+});
+
+test("Douyin detail deletion status is not masked by status_code zero", () => {
+  const error = parser._classifyDetailStatus({
+    status_code: 0,
+    aweme_detail: { status: { is_delete: 1 } },
+  });
+
+  assert.equal(error.code, "CONTENT_DELETED");
+  assert.equal(error.category, "content");
+  assert.equal(error.permanent, true);
+});
+
+test("Douyin permanent detail errors are not overwritten by later retryable status", () => {
+  const deleted = parser._classifyDetailStatus({
+    status_code: 0,
+    aweme_detail: { status: { is_delete: 1 } },
+  });
+  const imageNote = parser._classifyUnsupportedDetail({
+    aweme_detail: {
+      aweme_type: 68,
+      images: [{ url_list: ["https://example.test/image.jpg"] }],
+      video: null,
+    },
+  }, "https://www.douyin.com/note/123456");
+  const retryableStatus = parser._classifyDetailStatus({
+    status_code: 5,
+    aweme_detail: { status: {} },
+  });
+
+  // Simulate response handler assignment order: permanent first, then a later retryable detail.
+  let permanentError = null;
+  permanentError = preferPlatformError(permanentError, deleted);
+  permanentError = preferPlatformError(permanentError, retryableStatus);
+  assert.equal(permanentError.code, "CONTENT_DELETED");
+  assert.equal(permanentError.permanent, true);
+
+  permanentError = preferPlatformError(permanentError, imageNote);
+  permanentError = preferPlatformError(permanentError, retryableStatus);
+  assert.equal(permanentError.code, "UNSUPPORTED_CONTENT_TYPE");
+  assert.equal(permanentError.permanent, true);
+  assert.equal(retryableStatus.retryable, true);
+
+  // Body deleted text must upgrade over an earlier retryable detail status (not ??=).
+  permanentError = preferPlatformError(null, retryableStatus);
+  permanentError = preferPlatformError(permanentError, new PlatformError("已删除", {
+    code: "CONTENT_DELETED",
+    category: "content",
+    permanent: true,
+    retryable: false,
+  }));
+  assert.equal(permanentError.code, "CONTENT_DELETED");
+  assert.equal(permanentError.permanent, true);
 });

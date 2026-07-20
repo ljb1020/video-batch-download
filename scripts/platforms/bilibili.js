@@ -1,4 +1,4 @@
-import { PlatformParser } from "./base.js";
+import { PlatformError, PlatformParser, preferPlatformError } from "./base.js";
 import { itemKey, sleep, settleWithin } from "../utils/common.js";
 
 const URL_PATTERNS = [
@@ -11,6 +11,29 @@ const QUALITY_LABELS = new Map([
   [116, "1080P60"], [112, "1080P+"], [80, "1080P"], [74, "720P60"],
   [64, "720P"], [32, "480P"], [16, "360P"], [6, "240P"],
 ]);
+
+// Only known content/access codes are permanent; rate-limit / risk-control stay retryable.
+const PERMANENT_VIEW_API_CODES = new Set([
+  -404, // not found
+  62002, // 稿件不可见
+  62004, // 稿件审核中
+]);
+
+export function classifyBilibiliViewApiError(code) {
+  if (code == null || Number(code) === 0) return null;
+  const numeric = Number(code);
+  const permanent = PERMANENT_VIEW_API_CODES.has(numeric);
+  return new PlatformError(`Bilibili API error: code ${numeric}`, {
+    code: permanent ? "CONTENT_UNAVAILABLE" : "PLATFORM_API_ERROR",
+    category: permanent ? "content" : "platform",
+    permanent,
+    retryable: !permanent,
+    retryScope: permanent ? "none" : "item",
+    userMessage: permanent
+      ? `B站接口返回内容不可用状态 ${numeric}，已跳过。`
+      : `B站接口返回异常状态 ${numeric}，稍后会重新解析。`,
+  });
+}
 
 function numericFps(value) {
   if (Number.isFinite(value)) return value;
@@ -48,7 +71,7 @@ export class BilibiliParser extends PlatformParser {
     let viewApiData = null;
     let playurlApiData = null;
     const observedPlayurlData = [];
-    let permanentReason = null;
+    let permanentError = null;
 
     page.on("response", async (response) => {
       const responseUrl = response.url();
@@ -60,7 +83,7 @@ export class BilibiliParser extends PlatformParser {
           if (json.code === 0 && json.data) {
             viewApiData = json.data;
           } else if (json.code !== 0) {
-            permanentReason = `Bilibili API error: code ${json.code}`;
+            permanentError = preferPlatformError(permanentError, classifyBilibiliViewApiError(json.code));
           }
         } catch (e) { console.warn(`[bilibili] failed to parse view API response: ${e.message}`); }
       }
@@ -93,9 +116,22 @@ export class BilibiliParser extends PlatformParser {
       const finalUrl = page.url();
       const bodyText = await page.locator("body").innerText({ timeout: 3_000 }).catch(() => "");
 
-      // Check for permanent failures
+      // Check for permanent failures (preferPlatformError can upgrade over retryable API noise)
       if (/视频不存在|已被删除|审核中|仅限港澳台地区/u.test(bodyText)) {
-        permanentReason = bodyText.match(/视频不存在|已被删除|审核中|仅限港澳台地区/u)?.[0];
+        const matched = bodyText.match(/视频不存在|已被删除|审核中|仅限港澳台地区/u)?.[0];
+        permanentError = preferPlatformError(permanentError, new PlatformError(matched, {
+          code: /视频不存在|已被删除/u.test(matched)
+            ? "CONTENT_DELETED"
+            : "CONTENT_UNAVAILABLE",
+          category: "content",
+          permanent: true,
+          retryable: false,
+          userMessage: `B站视频${matched}，已跳过。`,
+        }));
+      }
+
+      if (permanentError?.permanent) {
+        throw permanentError;
       }
 
       // B站 view API 未登录时只返回 { judge: ... }，缺少核心字段
@@ -125,10 +161,14 @@ export class BilibiliParser extends PlatformParser {
       }
 
       if (!viewApiData) {
-        const reason = permanentReason ?? "No Bilibili view API response";
-        const error = new Error(reason);
-        error.permanent = Boolean(permanentReason);
-        throw error;
+        if (permanentError) throw permanentError;
+        throw new PlatformError("No Bilibili view API response", {
+          code: "MEDIA_DISCOVERY_FAILED",
+          category: "platform",
+          retryable: true,
+          retryScope: "item",
+          userMessage: "没有捕获到B站视频详情，稍后会重新解析。",
+        });
       }
 
       const pagePlayinfo = await this._extractPlayinfoFromPage(page);
@@ -147,12 +187,17 @@ export class BilibiliParser extends PlatformParser {
       }
 
       if (!playurlApiData) {
+        if (permanentError) throw permanentError;
         const bvid = viewApiData?.bvid ?? url.match(/(BV[\w]+)/i)?.[1] ?? null;
         const cid = this._resolveCid(viewApiData, url);
         const detail = bvid || cid ? ` (bvid=${bvid ?? "unknown"}, cid=${cid ?? "unknown"})` : "";
-        const err = new Error(`No Bilibili playurl data after page intercept and API fallback${detail}`);
-        err.permanent = Boolean(permanentReason);
-        throw err;
+        throw new PlatformError(`No Bilibili playurl data after page intercept and API fallback${detail}`, {
+          code: "MEDIA_DISCOVERY_FAILED",
+          category: "platform",
+          retryable: true,
+          retryScope: "item",
+          userMessage: "没有捕获到B站播放地址，稍后会重新解析。",
+        });
       }
 
       // Extract video ID (bvid or aid, with URL-based fallback)
@@ -188,7 +233,14 @@ export class BilibiliParser extends PlatformParser {
       const mediaStreams = mediaAlternatives[0] ?? [];
 
       if (mediaStreams.length === 0) {
-        throw new Error("No valid media streams found");
+        if (permanentError) throw permanentError;
+        throw new PlatformError("No valid media streams found", {
+          code: "MEDIA_DISCOVERY_FAILED",
+          category: "platform",
+          retryable: true,
+          retryScope: "item",
+          userMessage: "没有找到可用的B站视频流，稍后会重新解析。",
+        });
       }
 
       return {

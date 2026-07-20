@@ -1,4 +1,4 @@
-import { PlatformParser } from "./base.js";
+import { PlatformError, PlatformParser, preferPlatformError } from "./base.js";
 import { itemKey, sleep, settleWithin } from "../utils/common.js";
 
 const URL_PATTERNS = [
@@ -26,7 +26,7 @@ export class KuaishouParser extends PlatformParser {
     const mediaCandidates = [];
     const interceptedDetails = new Map();
     const responseTasks = new Set();
-    let permanentReason = null;
+    let permanentError = null;
     let riskControlled = false;
     let closing = false;
 
@@ -96,16 +96,42 @@ export class KuaishouParser extends PlatformParser {
 
       const bodyText = await page.locator("body").innerText({ timeout: 3_000 }).catch(() => "");
       if (/该视频已删除|视频不存在|暂无权限|该作品已删除|无法查看/u.test(bodyText)) {
-        permanentReason = bodyText.match(/该视频已删除|视频不存在|暂无权限|该作品已删除|无法查看/u)?.[0];
+        const matched = bodyText.match(/该视频已删除|视频不存在|暂无权限|该作品已删除|无法查看/u)?.[0];
+        permanentError = preferPlatformError(permanentError, new PlatformError(matched, {
+          code: /暂无权限|无法查看/u.test(matched) ? "CONTENT_PRIVATE" : "CONTENT_DELETED",
+          category: "content",
+          permanent: true,
+          retryable: false,
+          userMessage: `快手作品${matched}，已跳过。`,
+        }));
+      }
+
+      if (permanentError?.permanent) {
+        throw permanentError;
       }
 
       if (!targetVideoId) {
-        throw new Error("Could not determine the target Kuaishou photo ID after redirect");
+        throw new PlatformError("Could not determine the target Kuaishou photo ID after redirect", {
+          code: "MEDIA_DISCOVERY_FAILED",
+          category: "platform",
+          retryable: true,
+          retryScope: "item",
+          userMessage: "无法确定快手视频 ID，稍后会重新解析。",
+        });
       }
 
       const detail = pageDetail ?? interceptedDetails.get(targetVideoId) ?? null;
       if (detail?.photo?.id && String(detail.photo.id) !== targetVideoId) {
-        throw new Error(`Kuaishou detail photo ID mismatch: expected ${targetVideoId}, got ${detail.photo.id}`);
+        throw new PlatformError(
+          `Kuaishou detail photo ID mismatch: expected ${targetVideoId}, got ${detail.photo.id}`,
+          {
+            code: "MEDIA_DISCOVERY_FAILED",
+            category: "platform",
+            retryable: true,
+            retryScope: "item",
+            userMessage: "快手详情与目标视频不一致，稍后会重新解析。",
+          }
+        );
       }
 
       const exactResponseCandidates = mediaCandidates.filter((candidate) =>
@@ -115,13 +141,25 @@ export class KuaishouParser extends PlatformParser {
       const candidates = [...detailCandidates, ...exactResponseCandidates];
 
       if (candidates.length === 0) {
+        if (permanentError) throw permanentError;
         const challenge = riskControlled || /验证|滑块|captcha|风控/i.test(bodyText);
-        const reason = permanentReason ?? (challenge
-          ? "Kuaishou verification challenge"
-          : `No target media found (photoId: ${targetVideoId})`);
-        const error = new Error(reason);
-        error.permanent = Boolean(permanentReason);
-        throw error;
+        if (challenge) {
+          throw new PlatformError("Kuaishou verification challenge", {
+            code: "VERIFICATION_REQUIRED",
+            category: "access",
+            retryable: true,
+            retryScope: "item",
+            userMessage: "快手触发验证码/风控，稍后会按重试策略再试。",
+            suggestion: "如果反复出现，可使用 --headed 手动验证，或提供 --storage-state 登录态。",
+          });
+        }
+        throw new PlatformError(`No target media found (photoId: ${targetVideoId})`, {
+          code: "MEDIA_DISCOVERY_FAILED",
+          category: "platform",
+          retryable: true,
+          retryScope: "item",
+          userMessage: "没有捕获到快手视频媒体地址，稍后会重新解析。",
+        });
       }
 
       candidates.sort((a, b) => this._compareCandidates(a, b));

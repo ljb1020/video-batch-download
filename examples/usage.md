@@ -22,7 +22,7 @@ node scripts/download.mjs "https://v.douyin.com/iRNBho5/" --output ./douyin_resu
 ```
 [platforms] loaded 5: bilibili, douyin, kuaishou, weibo, xiaohongshu
 [batch] 1 unique URL(s), parse concurrency 1, download concurrency 1, video output item folders, transcribe on (serial, medium, cuda), output ./douyin_results
-[1/1] parse attempt 1/10: https://v.douyin.com/iRNBho5/
+[1/1] parse attempt 1/3: https://v.douyin.com/iRNBho5/
 [1/1] extracting audio...
 [1/1] transcribing (medium, cuda/float16)...
 [1/1] complete (3829104 bytes, transcribed): douyin_results/2026_06_24_21-30-00_抖音_张三_740123456789/...json

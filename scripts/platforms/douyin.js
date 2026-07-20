@@ -1,4 +1,4 @@
-import { PlatformParser } from "./base.js";
+import { PlatformError, PlatformParser, preferPlatformError } from "./base.js";
 import { sanitizeName, itemKey, sleep, settleWithin } from "../utils/common.js";
 
 const URL_PATTERNS = [
@@ -27,7 +27,7 @@ export class DouyinParser extends PlatformParser {
     const candidates = [];
     const advertisedQualities = new Set();
     let detailStatus = null;
-    let permanentReason = null;
+    let permanentError = null;
     let detailMeta = null;
 
     const addCandidate = (candidate) => {
@@ -79,10 +79,11 @@ export class DouyinParser extends PlatformParser {
             this._collectMediaUrls(json, detailCandidates);
             for (const candidate of detailCandidates) addCandidate(candidate);
             for (const quality of this._extractAdvertisedQualities(json)) advertisedQualities.add(quality);
-            const statusCode = json?.status_code ?? json?.aweme_detail?.status?.is_delete;
-            if (statusCode && statusCode !== 0) {
-              permanentReason = `Douyin detail status: ${statusCode}`;
-            }
+            const statusError = this._classifyDetailStatus(json);
+            const unsupportedError = this._classifyUnsupportedDetail(json, url, detailCandidates);
+            // Never demote a permanent content error with a later retryable API status.
+            permanentError = preferPlatformError(permanentError, statusError);
+            permanentError = preferPlatformError(permanentError, unsupportedError);
             detailMeta = this._extractDetailMeta(json);
           } catch (e) { console.warn(`[douyin] failed to parse detail API response: ${e.message}`); }
         }
@@ -99,6 +100,7 @@ export class DouyinParser extends PlatformParser {
       const deadline = Date.now() + options.mediaWaitMs;
       let firstSeenAt = null;
       while (Date.now() < deadline) {
+        if (permanentError?.permanent) break;
         if (candidates.length > 0) {
           firstSeenAt ??= Date.now();
           if (Date.now() - firstSeenAt >= 2_000) break;
@@ -114,26 +116,55 @@ export class DouyinParser extends PlatformParser {
         addCandidate(candidate);
       }
 
-      // Check for permanent failures
+      // Check for permanent failures (upgrade over earlier retryable API status)
       if (/作品不存在|视频不见了|已删除|暂无权限|私密作品/u.test(bodyText)) {
-        permanentReason = bodyText.match(/作品不存在|视频不见了|已删除|暂无权限|私密作品/u)?.[0];
+        const matched = bodyText.match(/作品不存在|视频不见了|已删除|暂无权限|私密作品/u)?.[0];
+        permanentError = preferPlatformError(permanentError, new PlatformError(matched, {
+          code: /暂无权限|私密作品/u.test(matched) ? "CONTENT_PRIVATE" : "CONTENT_DELETED",
+          category: "content",
+          permanent: true,
+          retryable: false,
+          userMessage: `抖音作品${matched}，已跳过。`,
+        }));
+      }
+
+      if (permanentError?.permanent) {
+        throw permanentError;
       }
 
       if (candidates.length === 0) {
+        if (permanentError) throw permanentError;
         const challenge = /验证码|安全验证|完成验证|captcha/i.test(bodyText);
-        const reason = permanentReason ?? (challenge
-          ? "Douyin verification challenge"
-          : `No media response (detail status ${detailStatus ?? "unknown"})`);
-        const error = new Error(reason);
-        error.permanent = Boolean(permanentReason);
-        throw error;
+        if (challenge) {
+          throw new PlatformError("Douyin verification challenge", {
+            code: "VERIFICATION_REQUIRED",
+            category: "access",
+            retryable: true,
+            retryScope: "item",
+            userMessage: "抖音触发验证码/安全验证，稍后会按重试策略再试。",
+            suggestion: "如果反复出现，可使用 --headed 手动验证，或提供 --storage-state 登录态。",
+          });
+        }
+        throw new PlatformError(`No media response (detail status ${detailStatus ?? "unknown"})`, {
+          code: "MEDIA_DISCOVERY_FAILED",
+          category: "platform",
+          retryable: true,
+          retryScope: "item",
+          userMessage: "没有捕获到抖音视频媒体地址，稍后会重新解析。",
+        });
       }
 
       candidates.sort((a, b) => this._compareCandidates(b, a));
       const mediaAlternatives = this._buildMediaAlternatives(candidates);
       const mediaStreams = mediaAlternatives[0] ?? [];
       if (mediaStreams.length === 0) {
-        throw new Error("No valid Douyin media streams found");
+        throw new PlatformError("No valid Douyin media streams found", {
+          code: "MEDIA_DISCOVERY_FAILED",
+          category: "platform",
+          retryable: true,
+          retryScope: "item",
+          userMessage: "没有找到可用的抖音视频流，稍后会重新解析。",
+        });
       }
 
       const availableStreams = candidates.map((candidate) => this._publicStream(candidate));
@@ -173,6 +204,62 @@ export class DouyinParser extends PlatformParser {
     } finally {
       await settleWithin(context.close(), 5_000);
     }
+  }
+
+  _classifyDetailStatus(json) {
+    const detail = json?.aweme_detail ?? json;
+    const status = detail?.status ?? {};
+    if (status?.is_delete || detail?.is_delete) {
+      return new PlatformError("Douyin content was deleted", {
+        code: "CONTENT_DELETED",
+        category: "content",
+        permanent: true,
+        retryable: false,
+        userMessage: "抖音作品已删除，已跳过。",
+      });
+    }
+
+    const statusCode = json?.status_code;
+    if (statusCode && statusCode !== 0) {
+      return new PlatformError(`Douyin detail API status: ${statusCode}`, {
+        code: "PLATFORM_API_ERROR",
+        category: "platform",
+        retryable: true,
+        retryScope: "item",
+        userMessage: `抖音详情接口返回异常状态 ${statusCode}，稍后会重新解析。`,
+      });
+    }
+
+    return null;
+  }
+
+  _classifyUnsupportedDetail(json, url = "", mediaCandidates = null) {
+    const detail = json?.aweme_detail ?? json;
+    if (!detail || typeof detail !== "object") return null;
+    const candidates = Array.isArray(mediaCandidates) ? mediaCandidates : [];
+    if (!Array.isArray(mediaCandidates)) {
+      this._collectMediaUrls(json, candidates);
+    }
+    const hasVideoMedia = candidates.some((candidate) => candidate.type === "video+audio" || candidate.type === "video");
+    const hasImageEvidence = /\/note\//i.test(url)
+      || [68, 150].includes(Number(detail.aweme_type))
+      || (Array.isArray(detail.images) && detail.images.length > 0)
+      || (Array.isArray(detail.image_infos) && detail.image_infos.length > 0)
+      || Boolean(detail.image_post_info);
+
+    if (hasImageEvidence && !hasVideoMedia) {
+      return new PlatformError("Douyin image/text note is not a transcribable video", {
+        code: "UNSUPPORTED_CONTENT_TYPE",
+        category: "content",
+        permanent: true,
+        retryable: false,
+        userMessage: "这是抖音图文作品，不是可转写视频，已跳过。",
+        suggestion: "如果需要处理图文内容，需要新增图片/文字提取能力。",
+        details: { contentType: "image_note" },
+      });
+    }
+
+    return null;
   }
 
   _extractVideoId(url) {
@@ -220,7 +307,15 @@ export class DouyinParser extends PlatformParser {
       url: candidate.url,
       type: candidate.type,
       format: candidate.format || "mp4",
-      ...(candidate.quality ? { quality: candidate.quality } : {}),
+      width: candidate.width || null,
+      height: candidate.height || null,
+      fps: candidate.fps || null,
+      bitrate: candidate.bitrate || null,
+      codec: candidate.codec,
+      quality: candidate.quality || null,
+      label: candidate.label,
+      source: candidate.source,
+      totalBytes: candidate.totalBytes || null,
       referer: "https://www.douyin.com/",
     };
   }

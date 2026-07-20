@@ -38,7 +38,7 @@
 - **分离流支持**：B站和抖音遇到视频/音频分离媒体流时，会自动下载并通过 ffmpeg 合并。
 - **运行时兜底**：结合平台 API、页面状态和浏览器实际观察到的媒体响应，提高 B站/抖音/快手/小红书/微博稳定性。
 - **可插拔平台适配器**：运行时自动发现平台插件、校验统一契约；单个插件损坏不会拖垮其他平台。
-- **媒体轨道校验**：只有最终 MP4 同时包含视频轨和音频轨，才会被标记为完成。
+- **媒体轨道校验**：最终 MP4 必须含视频轨；默认转写时还要求可用音轨（`--no-transcribe` 可跳过音轨要求）。
 - **成品画质校验**：通过 ffprobe 核对分辨率、帧率、编码和 HDR；最高候选失效时按画质顺序降级。
 - **断点续跑**：重复运行时可跳过已完成下载和已有转写结果；失败项支持指数退避重试。
 - **Agent Skill 可用**：可作为 Claude / Codex 类助手的 Skill 使用。
@@ -260,9 +260,9 @@ node scripts/agent-review.mjs finalize --summary ./video_results/download-summar
 | `completed` | 程序已完成要求的机器处理：转写成功，或用户明确传入 `--no-transcribe`。 |
 | `transcription_failed` | 视频和元数据成功，但转写及适用的 CPU 自动降级最终仍失败；视频和 JSON 继续保留。 |
 | `failed` | 解析、下载或输出失败，可按错误情况重试。 |
-| `permanent_failure` | 内容无效、不可用或属于其他不可重试错误。 |
+| `permanent_failure` | 内容无效、不可用或其它不可重试错误（已删除、私密、图文作品等）。 |
 
-这些是 `download-state.json` 中的机器状态；单条成功产物 JSON 仍使用 `status: "success"`。下载 CLI 的退出码只表达机器阶段：`0` 表示机器阶段成功，`1` 表示存在机器失败，`2` 表示参数或输入错误。Agent 审阅仍为 `pending` 不会改变下载 CLI 退出码。
+这些是 `download-state.json` 中的机器状态；单条成功产物 JSON 仍使用 `status: "success"`。失败 JSON 与 `transcription_failed` 条目还会写入结构化字段，如 `error_code`、`error_category`、`error_stage`、`retryable`、`permanent`、`user_message`，以及可选的 `technical_error` / `suggestion`。`transcription_error` 始终是技术错误串；面向用户的中文说明在 `user_message`。下载 CLI 的退出码只表达机器阶段：`0` 表示机器阶段成功，`1` 表示存在机器失败，`2` 表示参数或输入错误。Agent 审阅仍为 `pending` 不会改变下载 CLI 退出码。
 
 审阅阶段有独立完成语义：`agent-review finalize` 返回 `0` 表示所有必需审阅完成或无需审阅，`1` 表示存在 failed/blocked/stale，`2` 表示参数、schema 或状态损坏，`3` 表示 pending/paused/有效 in-progress 等可恢复待续状态。只有机器阶段满足用户请求且审阅 finalize 返回 `0`，整个 Skill 任务才算完成。
 
@@ -316,6 +316,14 @@ node scripts/agent-review.mjs finalize --summary ./video_results/download-summar
 		"fallback_reason": null
 	},
 	"transcription_error": null,
+	"error_code": null,
+	"error_category": null,
+	"error_stage": null,
+	"retryable": null,
+	"permanent": null,
+	"user_message": null,
+	"technical_error": null,
+	"suggestion": null,
 	"agent_review": {
 		"schema_version": 2,
 		"required": true,
@@ -382,7 +390,7 @@ node scripts/agent-review.mjs finalize --summary ./video_results/download-summar
 | `--output <dir>`             | `./video_results` | 输出目录                           |
 | `--parse-concurrency <n>`    | `1`               | 并发浏览器解析数                   |
 | `--download-concurrency <n>` | `1`               | 并发下载数（默认串行以提高稳定性） |
-| `--max-attempts <n>`         | `10`              | 每条链接重试次数（0 = 无限重试）   |
+| `--max-attempts <n>`         | `3`               | 每条可重试链接的尝试次数；永久失败不会重试（0 = 无限重试） |
 | `--page-timeout <secs>`      | `45`              | 页面导航超时                       |
 | `--media-wait <secs>`        | `25`              | 等待媒体响应时间                   |
 | `--download-timeout <secs>`  | `900`             | 单个文件下载超时                   |
@@ -425,14 +433,16 @@ Playwright 打开页面并捕获媒体地址
     ↓
 下载视频 / 音频流到 <output>/.temp 缓存
     ↓
-必要时通过 ffmpeg 合并 DASH 流
+必要时通过 ffmpeg 合并 DASH 流，并在接受文件前探测音视频轨
     ↓
-提取音频并通过 faster-whisper 本地转写
+未使用 `--no-transcribe` 时，下载/续传会按转写需要门控音轨
     ↓
-保存 MP4、元数据 JSON 和 TXT 文案
+提取音频并通过 faster-whisper 本地转写（超时等错误阶段内重试，耗尽后终态不可再重试）
+    ↓
+保存 MP4、元数据 JSON（失败时含结构化错误字段）和 TXT 文案
 ```
 
-解析与下载默认并发为 `1`，更稳定，可通过 CLI 参数提高。Whisper 模型在进程内加载一次并复用。
+解析与下载默认并发为 `1`，更稳定，可通过 CLI 参数提高。Whisper 模型在进程内加载一次并复用。平台插件抛出 `PlatformError`（`ProcessingError` 子类）；永久内容失败不会被后续临时接口噪声降级。
 
 ## 运行测试
 

@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { PlatformError, preferPlatformError } from "../scripts/platforms/base.js";
 import { KuaishouParser } from "../scripts/platforms/kuaishou.js";
-import { XiaohongshuParser } from "../scripts/platforms/xiaohongshu.js";
+import { XiaohongshuParser, classifyXiaohongshuFeedApiError } from "../scripts/platforms/xiaohongshu.js";
 
 test("Kuaishou selects a higher-resolution HEVC manifest over a lower-resolution H264 URL", () => {
   const parser = new KuaishouParser();
@@ -75,4 +76,34 @@ test("quality audit exposes anonymous candidates and the selection reason", () =
   assert.deepEqual(audit.accessibleQualities, ["1080x1920", "720x1280"]);
   assert.equal(audit.selectedQuality, "1080x1920");
   assert.match(audit.selectionReason, /resolution, frame rate, bitrate, and size/);
+});
+
+test("Xiaohongshu temporary feed API failures stay retryable", () => {
+  const busy = classifyXiaohongshuFeedApiError("系统繁忙，请稍后再试");
+  assert.equal(busy.code, "PLATFORM_API_ERROR");
+  assert.equal(busy.permanent, false);
+  assert.equal(busy.retryable, true);
+
+  const deleted = classifyXiaohongshuFeedApiError("该笔记已被删除");
+  assert.equal(deleted.code, "CONTENT_UNAVAILABLE");
+  assert.equal(deleted.permanent, true);
+  assert.equal(deleted.retryable, false);
+});
+
+test("Xiaohongshu later temporary feed errors do not demote permanent content failures", () => {
+  let permanentError = preferPlatformError(null, classifyXiaohongshuFeedApiError("该笔记已被删除"));
+  permanentError = preferPlatformError(permanentError, classifyXiaohongshuFeedApiError("系统繁忙，请稍后再试"));
+  assert.equal(permanentError.code, "CONTENT_UNAVAILABLE");
+  assert.equal(permanentError.permanent, true);
+
+  // Body permanent upgrades sticky retryable feed error.
+  permanentError = preferPlatformError(null, classifyXiaohongshuFeedApiError("系统繁忙"));
+  permanentError = preferPlatformError(permanentError, new PlatformError("该笔记已被删除", {
+    code: "CONTENT_DELETED",
+    category: "content",
+    permanent: true,
+    retryable: false,
+  }));
+  assert.equal(permanentError.code, "CONTENT_DELETED");
+  assert.equal(permanentError.permanent, true);
 });

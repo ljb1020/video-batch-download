@@ -1,4 +1,4 @@
-import { PlatformParser } from "./base.js";
+import { PlatformError, PlatformParser, preferPlatformError } from "./base.js";
 import { itemKey, sleep, settleWithin } from "../utils/common.js";
 
 const URL_PATTERNS = [
@@ -6,6 +6,24 @@ const URL_PATTERNS = [
   /^https?:\/\/(?:www\.)?xiaohongshu\.com\/note\/[\w]+/i,
   /^https?:\/\/xhslink\.com\//i,
 ];
+
+export function classifyXiaohongshuFeedApiError(msg) {
+  const text = String(msg ?? "unknown");
+  const permanent = /不存在|已删除|已被删除|违规|无法查看|私密/u.test(text);
+  return new PlatformError(
+    `Xiaohongshu feed API error: ${text}`,
+    {
+      code: permanent ? "CONTENT_UNAVAILABLE" : "PLATFORM_API_ERROR",
+      category: permanent ? "content" : "platform",
+      permanent,
+      retryable: !permanent,
+      retryScope: permanent ? "none" : "item",
+      userMessage: permanent
+        ? `小红书接口返回内容不可用：${text}，已跳过。`
+        : `小红书接口返回异常：${text}，稍后会重新解析。`,
+    },
+  );
+}
 
 export class XiaohongshuParser extends PlatformParser {
   static getPlatformName() {
@@ -25,7 +43,7 @@ export class XiaohongshuParser extends PlatformParser {
 
     let feedApiData = null;
     let noteApiData = null;
-    let permanentReason = null;
+    let permanentError = null;
     const mediaCandidates = [];
     const responseTasks = new Set();
     let closing = false;
@@ -60,7 +78,10 @@ export class XiaohongshuParser extends PlatformParser {
           if (json.success && json.data) {
             feedApiData = json.data;
           } else if (!json.success) {
-            permanentReason = `Xiaohongshu feed API error: ${json.msg ?? "unknown"}`;
+            permanentError = preferPlatformError(
+              permanentError,
+              classifyXiaohongshuFeedApiError(json.msg ?? "unknown"),
+            );
           }
         } catch (e) { if (!closing) console.warn(`[xiaohongshu] failed to parse feed API response: ${e.message}`); }
       }
@@ -114,9 +135,21 @@ export class XiaohongshuParser extends PlatformParser {
         addMediaCandidate(candidate);
       }
 
-      // Check for permanent failures
+      // Check for permanent failures (preferPlatformError can upgrade over retryable API noise)
       if (/该笔记已被删除|违规|无法查看|不存在/u.test(bodyText)) {
-        permanentReason = bodyText.match(/该笔记已被删除|违规|无法查看|不存在/u)?.[0];
+        const matched = bodyText.match(/该笔记已被删除|违规|无法查看|不存在/u)?.[0];
+        permanentError = preferPlatformError(permanentError, new PlatformError(matched, {
+          code: /无法查看/u.test(matched) ? "CONTENT_PRIVATE" : "CONTENT_DELETED",
+          category: "content",
+          permanent: true,
+          retryable: false,
+          userMessage: `小红书笔记${matched}，已跳过。`,
+        }));
+      }
+
+      // Do not continue with stale page/CDN fragments once content is permanently unavailable.
+      if (permanentError?.permanent) {
+        throw permanentError;
       }
 
       const pageState = await this._extractNoteFromPage(page, targetNoteId);
@@ -134,10 +167,14 @@ export class XiaohongshuParser extends PlatformParser {
       }
 
       if (!noteData) {
-        const reason = permanentReason ?? "No Xiaohongshu note data found";
-        const error = new Error(reason);
-        error.permanent = Boolean(permanentReason);
-        throw error;
+        if (permanentError) throw permanentError;
+        throw new PlatformError("No Xiaohongshu note data found", {
+          code: "MEDIA_DISCOVERY_FAILED",
+          category: "platform",
+          retryable: true,
+          retryScope: "item",
+          userMessage: "没有捕获到小红书笔记数据，稍后会重新解析。",
+        });
       }
 
       for (const candidate of this._collectNoteMediaCandidates(noteData)) {
@@ -151,13 +188,26 @@ export class XiaohongshuParser extends PlatformParser {
       const noteType = noteData.type ?? noteData.noteType ?? "";
       const hasVideo = noteType === "video" || noteData.video != null || Boolean(videoUrl) || this._urlIndicatesVideo(finalUrl);
       if (!hasVideo) {
-        const err = new Error("This is an image/text note, not a video note");
-        err.permanent = true;
-        throw err;
+        throw new PlatformError("This is an image/text note, not a video note", {
+          code: "UNSUPPORTED_CONTENT_TYPE",
+          category: "content",
+          permanent: true,
+          retryable: false,
+          userMessage: "这是小红书图文笔记，不是可转写视频，已跳过。",
+          suggestion: "如果需要处理图文内容，需要新增图片/文字提取能力。",
+          details: { contentType: "image_note" },
+        });
       }
 
       if (!videoUrl) {
-        throw new Error("No video URL found in note data");
+        if (permanentError) throw permanentError;
+        throw new PlatformError("No video URL found in note data", {
+          code: "MEDIA_DISCOVERY_FAILED",
+          category: "platform",
+          retryable: true,
+          retryScope: "item",
+          userMessage: "没有找到小红书视频地址，稍后会重新解析。",
+        });
       }
 
       // 提取元数据
